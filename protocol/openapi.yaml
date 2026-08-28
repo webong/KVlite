@@ -1,0 +1,116 @@
+openapi: 3.1.0
+info:
+  title: KVLite HTTP API
+  version: 1.0.0
+  description: |
+    Language-neutral JSON API served by `kvlite serve`. Keys are encoded as
+    unpadded base64url in the path so arbitrary UTF-8 and binary-safe key names
+    cannot change the URL grammar.
+servers:
+  - url: http://127.0.0.1:8089
+security:
+  - bearerAuth: []
+paths:
+  /v1:
+    get:
+      security: []
+      summary: Discover the protocol
+      responses:
+        '200':
+          description: Protocol metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Discovery'
+  /v1/health:
+    get:
+      security: []
+      summary: Check server health
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    const: ok
+  /v1/entries/{key}:
+    parameters:
+      - $ref: '#/components/parameters/Key'
+    get:
+      summary: Read a JSON value
+      responses:
+        '200':
+          description: The stored JSON payload
+          headers:
+            X-KVLite-Expires-At:
+              description: Optional Unix timestamp in nanoseconds at which the value expires.
+              schema:
+                type: integer
+                format: int64
+          content:
+            application/json: {}
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '415':
+          description: The stored value was written with a non-JSON codec.
+    put:
+      summary: Write a JSON value
+      parameters:
+        - name: ttl_seconds
+          in: query
+          required: false
+          description: Positive TTL in seconds; omit or use zero for no expiry.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+      requestBody:
+        required: true
+        content:
+          application/json: {}
+      responses:
+        '204':
+          description: Stored
+        '400':
+          description: Invalid JSON, key, or TTL
+    delete:
+      summary: Delete a value
+      responses:
+        '204':
+          description: Deleted or already absent
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    Key:
+      name: key
+      in: path
+      required: true
+      description: Unpadded base64url encoding of the key bytes.
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]+$'
+  responses:
+    NotFound:
+      description: No live value exists for the key.
+  schemas:
+    Discovery:
+      type: object
+      required: [protocol, entries, methods]
+      properties:
+        protocol:
+          type: string
+          const: kvlite/1
+        entries:
+          type: string
+          const: /v1/entries/{base64url-key}
+        methods:
+          type: array
+          items:
+            type: string

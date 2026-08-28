@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -52,9 +53,24 @@ func startShareServer(db *DB, options SharingOptions) (*shareServer, error) {
 		IdleTimeout:       60 * time.Second,
 	}
 	result := &shareServer{listener: listener, server: server}
+	mux.HandleFunc("GET /v1", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Protocol string   `json:"protocol"`
+			Entries  string   `json:"entries"`
+			Methods  []string `json:"methods"`
+		}{
+			Protocol: "kvlite/1",
+			Entries:  "/v1/entries/{base64url-key}",
+			Methods:  []string{"GET", "PUT", "DELETE"},
+		})
+	})
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"status":"ok"}`)
+	})
+	mux.HandleFunc("/v1/entries/{key}", func(w http.ResponseWriter, request *http.Request) {
+		handleJSONEntry(db, options.MaxRequestBytes, w, request)
 	})
 	mux.HandleFunc("/v1/kv/{key}", func(w http.ResponseWriter, request *http.Request) {
 		key, err := base64.RawURLEncoding.DecodeString(request.PathValue("key"))
@@ -163,6 +179,93 @@ func startShareServer(db *DB, options SharingOptions) (*shareServer, error) {
 		_ = server.Serve(listener)
 	}()
 	return result, nil
+}
+
+// handleJSONEntry is the language-neutral API. It deliberately accepts and
+// returns JSON values, while /v1/kv remains the internal envelope transport
+// used by the Go remote client.
+func handleJSONEntry(db *DB, maxRequestBytes int64, w http.ResponseWriter, request *http.Request) {
+	rawKey, err := base64.RawURLEncoding.DecodeString(request.PathValue("key"))
+	if err != nil || len(rawKey) == 0 {
+		http.Error(w, "invalid key", http.StatusBadRequest)
+		return
+	}
+	key := string(rawKey)
+	ctx := request.Context()
+	switch request.Method {
+	case http.MethodGet:
+		data, found, err := db.engine.Get(ctx, valueKey(key))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		value, err := unmarshalEnvelope(data)
+		if err != nil {
+			http.Error(w, "invalid stored value", http.StatusInternalServerError)
+			return
+		}
+		if value.expiresAt > 0 && db.cfg.now().UnixNano() >= value.expiresAt {
+			_ = db.engine.Delete(ctx, valueKey(key))
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if value.codec != (JSONCodec{}).Name() {
+			http.Error(w, "stored value is not JSON", http.StatusUnsupportedMediaType)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if value.expiresAt > 0 {
+			w.Header().Set("X-KVLite-Expires-At", strconv.FormatInt(value.expiresAt, 10))
+		}
+		_, _ = w.Write(value.payload)
+	case http.MethodPut:
+		request.Body = http.MaxBytesReader(w, request.Body, maxRequestBytes)
+		payload, err := io.ReadAll(request.Body)
+		if err != nil || !json.Valid(payload) {
+			http.Error(w, "request body must be valid JSON and within the size limit", http.StatusBadRequest)
+			return
+		}
+		putOptions, err := parseTTLQuery(request.URL.Query().Get("ttl_seconds"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := db.Put(ctx, key, json.RawMessage(payload), putOptions...); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case http.MethodDelete:
+		if err := db.Delete(ctx, key); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "GET, PUT, DELETE")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func parseTTLQuery(raw string) ([]PutOption, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || seconds < 0 {
+		return nil, fmt.Errorf("ttl_seconds must be a non-negative integer")
+	}
+	if seconds == 0 {
+		return nil, nil
+	}
+	if seconds > int64(^uint64(0)>>1)/int64(time.Second) {
+		return nil, fmt.Errorf("ttl_seconds is too large")
+	}
+	return []PutOption{TTL(time.Duration(seconds) * time.Second)}, nil
 }
 
 func sharingAuth(token string, next http.Handler) http.Handler {

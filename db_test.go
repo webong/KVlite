@@ -3,7 +3,10 @@ package kvlite
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"io"
+	"net/http"
 	"sort"
 	"sync"
 	"testing"
@@ -121,6 +124,21 @@ func TestPutGetAndGetAs(t *testing.T) {
 	}
 }
 
+func TestPutBytesPreservesSerializedPayload(t *testing.T) {
+	db, _ := testDB(t)
+	want := []byte{0, 1, 2, 255}
+	if err := db.PutBytes(context.Background(), "binary", want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetBytes(context.Background(), "binary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("GetBytes() = %v, want %v", got, want)
+	}
+}
+
 func TestTTLIsEnforcedAtReadAndLazilyDeleted(t *testing.T) {
 	now := time.Date(2026, 8, 28, 10, 0, 0, 0, time.UTC)
 	db, storage := testDB(t, func(cfg *config) error {
@@ -228,6 +246,45 @@ func TestSharingRoundTripAndAuthentication(t *testing.T) {
 	defer unauthorized.Close()
 	if err := unauthorized.Get(ctx, "shared", &value); err == nil {
 		t.Fatal("unauthenticated read unexpectedly succeeded")
+	}
+}
+
+func TestPublicJSONHTTPAPI(t *testing.T) {
+	owner, _ := testDB(t, WithSharing(SharingOptions{ListenAddress: "127.0.0.1:0"}))
+	baseURL := owner.SharingAddress()
+	key := base64.RawURLEncoding.EncodeToString([]byte("http-key"))
+	putRequest, err := http.NewRequest(http.MethodPut, baseURL+"/v1/entries/"+key+"?ttl_seconds=60", bytes.NewBufferString(`{"answer":42}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	putRequest.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(putRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("PUT status = %s", response.Status)
+	}
+	response, err = http.Get(baseURL + "/v1/entries/" + key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || string(body) != `{"answer":42}` {
+		t.Fatalf("GET status/body = %s/%s", response.Status, body)
+	}
+	discovery, err := http.Get(baseURL + "/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer discovery.Body.Close()
+	if discovery.StatusCode != http.StatusOK {
+		t.Fatalf("discovery status = %s", discovery.Status)
 	}
 }
 

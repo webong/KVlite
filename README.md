@@ -3,7 +3,9 @@
 KVLite is a small, typed Go layer over RocksDB. It turns RocksDB's byte-oriented
 C API into a developer-friendly embedded store with conservative defaults,
 automatic JSON serialization, per-record TTLs, collections, and an optional
-HTTP sharing endpoint.
+HTTP sharing endpoint. Go is the implementation language, not the required
+application language: other languages use the JSON/HTTP protocol or the
+embedded C ABI.
 
 This repository is an MVP: the storage format is versioned and tested, while
 the public API is still free to evolve before a first stable release.
@@ -18,6 +20,8 @@ the public API is still free to evolve before a first stable release.
   namespaces.
 - An optional authenticated HTTP owner/client mode for multi-process access.
 - A RocksDB compaction filter that physically discards expired value envelopes.
+- A versioned, language-neutral JSON/HTTP API and OpenAPI description.
+- A small C ABI for Python/Rust/Node/PHP FFI wrappers that need embedded mode.
 
 ## Install RocksDB
 
@@ -110,6 +114,56 @@ _ = db.LRange(ctx, "jobs", 0, -1, &jobs)
 Hashes and sets use one RocksDB key per field/member. Lists use a compact,
 length-delimited record and are atomically updated by the database owner,
 including when the update comes through the HTTP client.
+
+## Use KVLite from any language
+
+The easiest cross-language deployment is to run the owner binary and speak the
+JSON API. The owner is the only process that opens the RocksDB directory; every
+other language uses ordinary HTTP and never needs RocksDB headers.
+
+Start the owner:
+
+```bash
+go build -tags rocksdb -o kvlite ./cmd/kvlite
+./kvlite serve --path ./kvlite-data --listen 127.0.0.1:8089 --token "$KVLITE_TOKEN"
+```
+
+Write and read from any shell:
+
+```bash
+KEY=$(printf user:101 | base64 | tr '+/' '-_' | tr -d '=\n')
+curl -fsS -X PUT "http://127.0.0.1:8089/v1/entries/$KEY?ttl_seconds=3600" \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $KVLITE_TOKEN" \
+  -d '{"id":101,"name":"Ada"}'
+curl -fsS "http://127.0.0.1:8089/v1/entries/$KEY" \
+  -H "Authorization: Bearer $KVLITE_TOKEN"
+```
+
+The protocol is documented in [`protocol/openapi.yaml`](protocol/openapi.yaml).
+The [`examples/python`](examples/python) and [`examples/node`](examples/node)
+clients use only their languages' standard HTTP libraries; equivalent clients
+can be generated from the OpenAPI document.
+
+### Embedded FFI mode
+
+For a SQLite-like embedded integration, build the C-compatible shared library:
+
+```bash
+make build-c-shared
+```
+
+This produces `dist/libkvlite.so` and the generated Go header. The checked-in
+[`capi/kvlite.h`](capi/kvlite.h) defines the stable ABI: open/close, put/get/
+delete, arbitrary serialized byte payloads, TTL seconds, status codes, and one
+`kvlite_free` allocator boundary. A Python `ctypes`, Rust `libloading`, PHP FFI,
+or Node N-API wrapper can therefore be a thin adapter rather than another
+database implementation.
+
+The C ABI intentionally deals in bytes. Language bindings choose their own
+serialization (JSON, MessagePack, protobuf, or a domain codec) and use
+`kvlite_put`/`kvlite_get` without exposing Go values or Go pointers across the
+boundary.
 
 ## Multi-process sharing
 

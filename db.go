@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // DB is a concurrency-safe KVLite database handle.
@@ -78,6 +79,26 @@ func (db *DB) Put(ctx context.Context, key string, value any, options ...PutOpti
 	return db.put(ctx, valueKey(key), value, options...)
 }
 
+// PutBytes stores an already-serialized payload without JSON re-encoding it.
+// GetBytes returns this payload exactly as written, regardless of its format.
+func (db *DB) PutBytes(ctx context.Context, key string, value []byte, options ...PutOption) error {
+	if key == "" {
+		return fmt.Errorf("%w: key is required", ErrInvalidArgument)
+	}
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	cfg := putConfig{}
+	for _, option := range options {
+		if option != nil {
+			if err := option(&cfg); err != nil {
+				return err
+			}
+		}
+	}
+	return db.putPayload(ctx, valueKey(key), BytesCodec{}.Name(), value, cfg.ttl)
+}
+
 func (db *DB) put(ctx context.Context, key []byte, value any, options ...PutOption) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
@@ -111,12 +132,54 @@ func (db *DB) put(ctx context.Context, key []byte, value any, options ...PutOpti
 	return nil
 }
 
+func (db *DB) putPayload(ctx context.Context, key []byte, codec string, payload []byte, ttl time.Duration) error {
+	var expiresAt int64
+	if ttl > 0 {
+		expiresAt = db.cfg.now().Add(ttl).UnixNano()
+	}
+	encoded, err := marshalEnvelope(codec, payload, expiresAt)
+	if err != nil {
+		return err
+	}
+	if err := db.engine.Put(ctx, key, encoded); err != nil {
+		return fmt.Errorf("kvlite: put: %w", err)
+	}
+	return nil
+}
+
 // Get decodes a stored value into target, which must be a non-nil pointer.
 func (db *DB) Get(ctx context.Context, key string, target any) error {
 	if key == "" {
 		return fmt.Errorf("%w: key is required", ErrInvalidArgument)
 	}
 	return db.get(ctx, valueKey(key), target)
+}
+
+// GetBytes returns the serialized payload for a live value.
+func (db *DB) GetBytes(ctx context.Context, key string) ([]byte, error) {
+	if key == "" {
+		return nil, fmt.Errorf("%w: key is required", ErrInvalidArgument)
+	}
+	if err := db.ensureOpen(); err != nil {
+		return nil, err
+	}
+	storageKey := valueKey(key)
+	data, found, err := db.engine.Get(ctx, storageKey)
+	if err != nil {
+		return nil, fmt.Errorf("kvlite: get: %w", err)
+	}
+	if !found {
+		return nil, ErrNotFound
+	}
+	value, err := unmarshalEnvelope(data)
+	if err != nil {
+		return nil, err
+	}
+	if value.expiresAt > 0 && db.cfg.now().UnixNano() >= value.expiresAt {
+		_ = db.engine.Delete(ctx, storageKey)
+		return nil, ErrNotFound
+	}
+	return append([]byte(nil), value.payload...), nil
 }
 
 func (db *DB) get(ctx context.Context, key []byte, target any) error {

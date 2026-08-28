@@ -1,4 +1,4 @@
-.PHONY: test test-race test-rocksdb vet
+.PHONY: test test-race test-rocksdb vet build-c-shared
 
 test:
 	go test ./...
@@ -11,3 +11,7 @@ test-rocksdb:
 
 vet:
 	go vet ./...
+
+build-c-shared:
+	mkdir -p dist
+	go build -tags rocksdb -buildmode=c-shared -o dist/libkvlite.so ./capi

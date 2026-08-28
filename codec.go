@@ -34,3 +34,27 @@ func (JSONCodec) Unmarshal(data []byte, target any) error {
 	}
 	return nil
 }
+
+// BytesCodec stores byte slices without an additional JSON representation.
+// It is useful for language bindings that already serialize values (for
+// example, a Python or Rust client sending JSON bytes through the C ABI).
+type BytesCodec struct{}
+
+func (BytesCodec) Name() string { return "bytes" }
+
+func (BytesCodec) Marshal(value any) ([]byte, error) {
+	data, ok := value.([]byte)
+	if !ok {
+		return nil, fmt.Errorf("%w: BytesCodec expects []byte, got %T", ErrInvalidArgument, value)
+	}
+	return append([]byte(nil), data...), nil
+}
+
+func (BytesCodec) Unmarshal(data []byte, target any) error {
+	result, ok := target.(*[]byte)
+	if !ok || result == nil {
+		return fmt.Errorf("%w: BytesCodec target must be *[]byte", ErrInvalidArgument)
+	}
+	*result = append((*result)[:0], data...)
+	return nil
+}
