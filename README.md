@@ -53,6 +53,20 @@ The `rocksdb` build tag is deliberate: consumers can run package-level tests,
 codec tests, and remote-client builds without requiring native headers. Calling
 `Open` without the tag returns `ErrRocksDBNotBuilt`; `OpenRemote` remains usable.
 
+### Native RocksDB tests in Docker
+
+If RocksDB headers are not installed on the host, run the tagged suite in the
+reproducible test container instead:
+
+```bash
+make test-rocksdb-docker
+```
+
+The helper builds `docker/rocksdb-test/Dockerfile`, installs Debian's
+`librocksdb-dev`, enables cgo, and runs `go test -tags rocksdb ./...`. The
+equivalent command is `docker compose -f compose.rocksdb.yml run --rm --build
+rocksdb-test`.
+
 ## Basic usage
 
 ```go
