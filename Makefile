@@ -1,4 +1,4 @@
-.PHONY: test test-race test-rocksdb vet build-cli build-c-shared
+.PHONY: test test-race test-rocksdb test-rocksdb-docker vet build-cli build-c-shared
 
 test:
 	go test ./...
@@ -8,6 +8,9 @@ test-race:
 
 test-rocksdb:
 	go test -tags rocksdb ./...
+
+test-rocksdb-docker:
+	bash ./scripts/test-rocksdb-docker.sh
 
 vet:
 	go vet ./...
