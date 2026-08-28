@@ -1,0 +1,13 @@
+.PHONY: test test-race test-rocksdb vet
+
+test:
+	go test ./...
+
+test-race:
+	go test -race ./...
+
+test-rocksdb:
+	go test -tags rocksdb ./...
+
+vet:
+	go vet ./...
