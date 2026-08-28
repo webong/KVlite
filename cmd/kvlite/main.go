@@ -30,6 +30,8 @@ func run(args []string) int {
 	listen := serveFlags.String("listen", "127.0.0.1:0", "HTTP listen address")
 	token := serveFlags.String("token", "", "Bearer token required by clients")
 	maxRequestBytes := serveFlags.Int64("max-request-bytes", 64<<20, "maximum JSON request size")
+	redisListen := serveFlags.String("redis-listen", "", "Redis RESP listen address (empty disables Redis)")
+	redisPassword := serveFlags.String("redis-password", "", "password required by Redis AUTH")
 	if err := serveFlags.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -37,17 +39,27 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "kvlite: --path is required")
 		return 2
 	}
-	db, err := kvlite.Open(*path, kvlite.WithSharing(kvlite.SharingOptions{
+	options := []kvlite.Option{kvlite.WithSharing(kvlite.SharingOptions{
 		ListenAddress:   *listen,
 		BearerToken:     *token,
 		MaxRequestBytes: *maxRequestBytes,
-	}))
+	})}
+	if *redisListen != "" {
+		options = append(options, kvlite.WithRedis(kvlite.RedisOptions{
+			ListenAddress: *redisListen,
+			Password:      *redisPassword,
+		}))
+	}
+	db, err := kvlite.Open(*path, options...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
 		return 1
 	}
 	defer db.Close()
-	fmt.Printf("%s\n", db.SharingAddress())
+	fmt.Printf("http=%s\n", db.SharingAddress())
+	if address := db.RedisAddress(); address != "" {
+		fmt.Printf("redis=%s\n", address)
+	}
 	fmt.Println("kvlite: serving; press Ctrl-C to stop")
 
 	signals := make(chan os.Signal, 1)
@@ -58,7 +70,7 @@ func run(args []string) int {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "Usage: kvlite serve --path DIR [--listen HOST:PORT] [--token TOKEN]")
-	fmt.Fprintln(os.Stderr, "\nThe binary owns the RocksDB lock and exposes the language-neutral HTTP API.")
+	fmt.Fprintln(os.Stderr, "Usage: kvlite serve --path DIR [--listen HOST:PORT] [--token TOKEN] [--redis-listen HOST:PORT] [--redis-password PASSWORD]")
+	fmt.Fprintln(os.Stderr, "\nThe binary owns the RocksDB lock and exposes the language-neutral HTTP and optional Redis APIs.")
 	fmt.Fprintln(os.Stderr, "Build with: go build -tags rocksdb ./cmd/kvlite")
 }

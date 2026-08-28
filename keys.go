@@ -3,10 +3,11 @@ package kvlite
 import "encoding/binary"
 
 const (
-	kindValue byte = 1
-	kindHash  byte = 2
-	kindSet   byte = 3
-	kindList  byte = 4
+	kindValue    byte = 1
+	kindHash     byte = 2
+	kindSet      byte = 3
+	kindList     byte = 4
+	kindRedisTTL byte = 5
 )
 
 func valueKey(key string) []byte {
@@ -27,4 +28,8 @@ func namespacedKey(kind byte, namespace, member string) []byte {
 
 func listKey(name string) []byte {
 	return append([]byte{kindList}, name...)
+}
+
+func redisTTLKey(key string) []byte {
+	return append([]byte{kindRedisTTL}, key...)
 }

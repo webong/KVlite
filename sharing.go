@@ -59,10 +59,12 @@ func startShareServer(db *DB, options SharingOptions) (*shareServer, error) {
 			Protocol string   `json:"protocol"`
 			Entries  string   `json:"entries"`
 			Methods  []string `json:"methods"`
+			Redis    string   `json:"redis,omitempty"`
 		}{
 			Protocol: "kvlite/1",
 			Entries:  "/v1/entries/{base64url-key}",
 			Methods:  []string{"GET", "PUT", "DELETE"},
+			Redis:    db.RedisAddress(),
 		})
 	})
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, _ *http.Request) {

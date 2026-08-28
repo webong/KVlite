@@ -13,10 +13,14 @@ type DB struct {
 	engine engine
 	cfg    config
 
-	mu           sync.RWMutex
+	mu sync.RWMutex
+	// redisMu serializes multi-step Redis commands (for example HSET and
+	// LPUSH) so each command observes one coherent view of the database.
+	redisMu      sync.Mutex
 	collectionMu sync.Mutex
 	closed       bool
 	server       *shareServer
+	redis        *redisServer
 }
 
 // Open opens or creates a RocksDB-backed KVLite database. Build the package
@@ -59,6 +63,17 @@ func newDB(storage engine, cfg config) (*DB, error) {
 		}
 		db.server = server
 	}
+	if cfg.redis != nil {
+		redis, err := startRedisServer(db, *cfg.redis)
+		if err != nil {
+			if db.server != nil {
+				_ = db.server.close()
+			}
+			_ = db.engine.Close()
+			return nil, err
+		}
+		db.redis = redis
+	}
 	return db, nil
 }
 
@@ -76,6 +91,13 @@ func (db *DB) Put(ctx context.Context, key string, value any, options ...PutOpti
 	if key == "" {
 		return fmt.Errorf("%w: key is required", ErrInvalidArgument)
 	}
+	db.redisMu.Lock()
+	defer db.redisMu.Unlock()
+	// A logical key has one Redis-compatible type. Remove any collection
+	// records before writing a scalar value through the generic API.
+	if _, err := db.redisDeleteRaw(ctx, key); err != nil {
+		return fmt.Errorf("kvlite: put: %w", err)
+	}
 	return db.put(ctx, valueKey(key), value, options...)
 }
 
@@ -87,6 +109,11 @@ func (db *DB) PutBytes(ctx context.Context, key string, value []byte, options ..
 	}
 	if err := db.ensureOpen(); err != nil {
 		return err
+	}
+	db.redisMu.Lock()
+	defer db.redisMu.Unlock()
+	if _, err := db.redisDeleteRaw(ctx, key); err != nil {
+		return fmt.Errorf("kvlite: put: %w", err)
 	}
 	cfg := putConfig{}
 	for _, option := range options {
@@ -254,7 +281,9 @@ func (db *DB) Delete(ctx context.Context, key string) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
-	if err := db.engine.Delete(ctx, valueKey(key)); err != nil {
+	db.redisMu.Lock()
+	defer db.redisMu.Unlock()
+	if _, err := db.redisDeleteRaw(ctx, key); err != nil {
 		return fmt.Errorf("kvlite: delete: %w", err)
 	}
 	return nil
@@ -271,6 +300,17 @@ func (db *DB) SharingAddress() string {
 	return db.server.address()
 }
 
+// RedisAddress returns the bound Redis RESP address, or an empty string when
+// the Redis compatibility endpoint is disabled.
+func (db *DB) RedisAddress() string {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if db.redis == nil {
+		return ""
+	}
+	return db.redis.address()
+}
+
 // Close stops sharing and closes RocksDB. It is safe to call more than once.
 func (db *DB) Close() error {
 	db.mu.Lock()
@@ -281,10 +321,15 @@ func (db *DB) Close() error {
 	db.closed = true
 	server := db.server
 	db.server = nil
+	redis := db.redis
+	db.redis = nil
 	db.mu.Unlock()
 
 	if server != nil {
 		_ = server.close()
+	}
+	if redis != nil {
+		_ = redis.close()
 	}
 	return db.engine.Close()
 }

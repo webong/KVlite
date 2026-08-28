@@ -8,4 +8,5 @@ var (
 	ErrInvalidArgument  = errors.New("kvlite: invalid argument")
 	ErrCodecUnavailable = errors.New("kvlite: value codec is unavailable")
 	ErrRocksDBNotBuilt  = errors.New("kvlite: RocksDB support is not built; rebuild with -tags rocksdb")
+	errRedisWrongType   = errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
 )

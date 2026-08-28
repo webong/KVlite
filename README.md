@@ -2,10 +2,10 @@
 
 KVLite is a small, typed Go layer over RocksDB. It turns RocksDB's byte-oriented
 C API into a developer-friendly embedded store with conservative defaults,
-automatic JSON serialization, per-record TTLs, collections, and an optional
-HTTP sharing endpoint. Go is the implementation language, not the required
-application language: other languages use the JSON/HTTP protocol or the
-embedded C ABI.
+automatic JSON serialization, per-record TTLs, collections, and optional HTTP
+and Redis-compatible endpoints. Go is the implementation language, not the
+required application language: other languages use the JSON/HTTP protocol, a
+normal Redis client, or the embedded C ABI.
 
 This repository is an MVP: the storage format is versioned and tested, while
 the public API is still free to evolve before a first stable release.
@@ -21,6 +21,8 @@ the public API is still free to evolve before a first stable release.
 - An optional authenticated HTTP owner/client mode for multi-process access.
 - A RocksDB compaction filter that physically discards expired value envelopes.
 - A versioned, language-neutral JSON/HTTP API and OpenAPI description.
+- An optional single-node Redis RESP2-compatible server for existing Redis
+  clients and CLI tools.
 - A small C ABI for Python/Rust/Node/PHP FFI wrappers that need embedded mode.
 
 ## Install RocksDB
@@ -144,6 +146,48 @@ The protocol is documented in [`protocol/openapi.yaml`](protocol/openapi.yaml).
 The [`examples/python`](examples/python) and [`examples/node`](examples/node)
 clients use only their languages' standard HTTP libraries; equivalent clients
 can be generated from the OpenAPI document.
+
+### Redis-compatible server
+
+KVLite can also expose the same database through a Redis-compatible RESP2
+endpoint. This is useful when an application already speaks Redis or when you
+want to inspect a local database with `redis-cli`:
+
+```bash
+go build -tags rocksdb -o kvlite ./cmd/kvlite
+./kvlite serve \
+  --path ./kvlite-data \
+  --listen 127.0.0.1:8089 \
+  --redis-listen 127.0.0.1:6379 \
+  --redis-password "$KVLITE_REDIS_PASSWORD"
+
+redis-cli -h 127.0.0.1 -p 6379 -a "$KVLITE_REDIS_PASSWORD" SET user:101 '{"id":101,"name":"Ada"}'
+redis-cli -h 127.0.0.1 -p 6379 -a "$KVLITE_REDIS_PASSWORD" GET user:101
+```
+
+The Go API is also available directly:
+
+```go
+db, err := kvlite.Open("./kvlite-data", kvlite.WithRedis(kvlite.RedisOptions{
+    ListenAddress: "127.0.0.1:6379",
+    Password:      os.Getenv("KVLITE_REDIS_PASSWORD"),
+}))
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+fmt.Println(db.RedisAddress())
+```
+
+The current server covers the everyday Redis data model: `GET`/`SET`, TTL
+commands, hashes, sets, lists, increments, key discovery, and common client
+handshake commands (`AUTH`, `HELLO`, `CLIENT`, `SELECT`, and `COMMAND`).
+Unsupported commands return a normal Redis `ERR` response. It is intentionally
+a single-node protocol gateway: replication, Sentinel, cluster routing,
+streams, sorted sets, Lua, and transactions are not part of this milestone.
+The process that opens the path remains the sole RocksDB owner.
+Keep the Redis listener on loopback or set `--redis-password` before binding it
+to a non-local interface; this endpoint does not provide TLS.
 
 ### Embedded FFI mode
 

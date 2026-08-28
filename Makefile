@@ -1,4 +1,4 @@
-.PHONY: test test-race test-rocksdb vet build-c-shared
+.PHONY: test test-race test-rocksdb vet build-cli build-c-shared
 
 test:
 	go test ./...
@@ -11,6 +11,10 @@ test-rocksdb:
 
 vet:
 	go vet ./...
+
+build-cli:
+	mkdir -p dist
+	go build -tags rocksdb -o dist/kvlite ./cmd/kvlite
 
 build-c-shared:
 	mkdir -p dist

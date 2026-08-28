@@ -114,3 +114,7 @@ components:
           type: array
           items:
             type: string
+        redis:
+          type: string
+          format: uri
+          description: Optional Redis RESP endpoint when enabled by the owner.
