@@ -1,0 +1,11 @@
+.git
+.github
+.codex
+.agents
+.DS_Store
+dist
+outputs
+work
+kvlite-data
+coverage.out
+*.test

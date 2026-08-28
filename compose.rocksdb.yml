@@ -1,0 +1,10 @@
+services:
+  rocksdb-test:
+    build:
+      context: .
+      dockerfile: docker/rocksdb-test/Dockerfile
+    init: true
+    environment:
+      CGO_ENABLED: "1"
+      GOTOOLCHAIN: local
+    command: ["go", "test", "-tags", "rocksdb", "./..."]
