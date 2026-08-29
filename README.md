@@ -28,8 +28,11 @@ the public API is still free to evolve before a first stable release.
 ## Install RocksDB
 
 KVLite uses [`github.com/linxGnu/grocksdb`](https://github.com/linxGnu/grocksdb),
-which calls RocksDB through cgo. Install RocksDB and its compression libraries
-before building the native adapter.
+which calls RocksDB through cgo. KVLite deliberately uses the portable C API
+surface shared by RocksDB `v10.8.3` through `v10.10.1`; newer RocksDB releases
+are expected to work, but are not a substitute for testing your target build.
+Install RocksDB and its compression development libraries before building the
+native adapter.
 
 On macOS with Homebrew:
 
@@ -62,10 +65,20 @@ reproducible test container instead:
 make test-rocksdb-docker
 ```
 
-The helper builds `docker/rocksdb-test/Dockerfile`, installs Debian's
-`librocksdb-dev`, enables cgo, and runs `go test -tags rocksdb ./...`. The
-equivalent command is `docker compose -f compose.rocksdb.yml run --rm --build
-rocksdb-test`.
+The helper builds `docker/rocksdb-test/Dockerfile`, compiles a pinned RocksDB
+source release, installs the cgo linker dependencies, and runs
+`go test -tags rocksdb ./...`. The equivalent command is
+`docker compose -f compose.rocksdb.yml run --rm --build rocksdb-test`.
+
+KVLite's Docker compatibility check runs both ends of the supported range:
+
+```bash
+make test-rocksdb-compat
+```
+
+For ordinary consumer builds, prefer KVLite's released native library instead
+of relying on a system RocksDB installation. System RocksDB is an advanced mode
+and should stay within the tested range.
 
 ## Basic usage
 
@@ -222,6 +235,33 @@ The C ABI intentionally deals in bytes. Language bindings choose their own
 serialization (JSON, MessagePack, protobuf, or a domain codec) and use
 `kvlite_put`/`kvlite_get` without exposing Go values or Go pointers across the
 boundary.
+
+### Build release artifacts
+
+The version-controlled release projects live in [`lib/`](lib/): the CLI and C
+shared-library contracts are defined there, and future thin Python, Node.js,
+PHP, and Rust packages will live under `lib/bindings/`. Generated artifacts are
+kept out of Git in `dist/`.
+
+On each native target with RocksDB installed, build a versioned release layout:
+
+```bash
+make release RELEASE_VERSION=v0.1.0
+```
+
+This emits the CLI, the platform shared library, the reviewed `kvlite.h` ABI
+header, and `SHA256SUMS` under `dist/v0.1.0/<os>-<arch>/`. Because RocksDB is a
+cgo/C++ dependency, the script intentionally refuses cross-compilation; the
+included GitHub Actions workflow builds Linux and macOS artifacts on native
+runners. `windows-amd64` is already part of the release contract and can be
+built by the same script on a Windows runner once its RocksDB toolchain is
+pinned in CI.
+
+The initial build produces native artifact candidates rather than a
+self-contained installer: RocksDB and its compression-library runtime files
+are not bundled yet. The release packaging phase must bundle those files,
+relocate their loader paths, and publish their license notices before the
+binary downloads are suitable for clean machines.
 
 ## Multi-process sharing
 

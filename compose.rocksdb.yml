@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: docker/rocksdb-test/Dockerfile
+      args:
+        ROCKSDB_VERSION: ${ROCKSDB_VERSION:-v10.8.3}
     init: true
     environment:
       CGO_ENABLED: "1"
