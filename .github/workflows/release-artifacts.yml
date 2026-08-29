@@ -1,0 +1,108 @@
+name: Build release artifacts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ROCKSDB_VERSION: v10.8.3
+
+jobs:
+  native-artifacts:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux-amd64
+          - os: macos-13
+            target: darwin-amd64
+          - os: macos-14
+            target: darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Install RocksDB build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential \
+            ca-certificates \
+            git \
+            libbz2-dev \
+            liblz4-dev \
+            libsnappy-dev \
+            libzstd-dev \
+            zlib1g-dev
+
+      - name: Install RocksDB build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bzip2 lz4 snappy zstd
+
+      - name: Build pinned RocksDB
+        shell: bash
+        run: |
+          rocksdb_source="${RUNNER_TEMP}/rocksdb-source"
+          rocksdb_prefix="${RUNNER_TEMP}/rocksdb"
+          git clone --depth 1 --branch "${ROCKSDB_VERSION}" \
+            https://github.com/facebook/rocksdb.git "${rocksdb_source}"
+
+          if [[ "${RUNNER_OS}" == 'macOS' ]]; then
+            homebrew_prefix="$(brew --prefix)"
+            export CPPFLAGS="-I${homebrew_prefix}/include"
+            export LDFLAGS="-L${homebrew_prefix}/lib"
+          fi
+
+          if command -v nproc >/dev/null 2>&1; then
+            jobs="$(nproc)"
+          else
+            jobs="$(sysctl -n hw.ncpu)"
+          fi
+          (
+            cd "${rocksdb_source}"
+            make -j"${jobs}" DISABLE_WARNING_AS_ERROR=1 shared_lib
+          )
+
+          mkdir -p "${rocksdb_prefix}/include" "${rocksdb_prefix}/lib"
+          cp -R "${rocksdb_source}/include/rocksdb" "${rocksdb_prefix}/include/"
+          cp "${rocksdb_source}"/librocksdb.* "${rocksdb_prefix}/lib/"
+          echo "KVLITE_ROCKSDB_PREFIX=${rocksdb_prefix}" >> "${GITHUB_ENV}"
+
+      - name: Build native artifacts
+        shell: bash
+        run: |
+          export CGO_CFLAGS="-I${KVLITE_ROCKSDB_PREFIX}/include"
+          export CGO_LDFLAGS="-L${KVLITE_ROCKSDB_PREFIX}/lib"
+          if [[ "${RUNNER_OS}" == 'macOS' ]]; then
+            homebrew_prefix="$(brew --prefix)"
+            export CGO_CFLAGS="${CGO_CFLAGS} -I${homebrew_prefix}/include"
+            export CGO_LDFLAGS="${CGO_LDFLAGS} -L${homebrew_prefix}/lib"
+            export DYLD_LIBRARY_PATH="${KVLITE_ROCKSDB_PREFIX}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+          else
+            export LD_LIBRARY_PATH="${KVLITE_ROCKSDB_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          fi
+
+          version="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF_TYPE}" != 'tag' ]]; then
+            version="dev-${GITHUB_SHA:0:12}"
+          fi
+          go test -tags rocksdb ./...
+          make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kvlite-${{ matrix.target }}
+          path: dist/*/${{ matrix.target }}
+          if-no-files-found: error

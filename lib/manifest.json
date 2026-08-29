@@ -1,0 +1,43 @@
+{
+  "format": 1,
+  "name": "kvlite",
+  "artifacts": [
+    {
+      "id": "cli",
+      "source": "cmd/kvlite",
+      "kind": "executable",
+      "releasePath": "bin/kvlite",
+      "description": "Owns a RocksDB directory and exposes the HTTP and Redis-compatible APIs."
+    },
+    {
+      "id": "c-shared",
+      "source": "capi",
+      "kind": "c-shared-library",
+      "releasePath": "lib/libkvlite.<platform-extension>",
+      "publicHeader": "capi/kvlite.h",
+      "description": "Embedded FFI library used by thin language wrappers."
+    }
+  ],
+  "targets": {
+    "linux-amd64": {
+      "library": "libkvlite.so",
+      "cli": "kvlite"
+    },
+    "linux-arm64": {
+      "library": "libkvlite.so",
+      "cli": "kvlite"
+    },
+    "darwin-amd64": {
+      "library": "libkvlite.dylib",
+      "cli": "kvlite"
+    },
+    "darwin-arm64": {
+      "library": "libkvlite.dylib",
+      "cli": "kvlite"
+    },
+    "windows-amd64": {
+      "library": "kvlite.dll",
+      "cli": "kvlite.exe"
+    }
+  }
+}
