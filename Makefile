@@ -1,4 +1,4 @@
-.PHONY: test test-race test-rocksdb test-rocksdb-docker test-rocksdb-compat vet build-cli build-c-shared release release-cli release-c-shared
+.PHONY: test test-race test-rocksdb test-rocksdb-docker test-rocksdb-compat test-bindings-docker vet build-cli build-c-shared release release-cli release-c-shared
 
 RELEASE_VERSION ?= dev
 RELEASE_TARGET ?= $(shell go env GOHOSTOS)-$(shell go env GOHOSTARCH)
@@ -21,6 +21,11 @@ test-rocksdb-docker:
 test-rocksdb-compat:
 	ROCKSDB_VERSION=v10.8.3 bash ./scripts/test-rocksdb-docker.sh
 	ROCKSDB_VERSION=v10.10.1 bash ./scripts/test-rocksdb-docker.sh
+
+# Build a real c-shared library in the RocksDB container and load it through
+# the Python ctypes package. This complements the dependency-free ABI mocks.
+test-bindings-docker:
+	bash ./scripts/test-bindings-docker.sh
 
 vet:
 	go vet ./...

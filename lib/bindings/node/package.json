@@ -1,0 +1,33 @@
+{
+  "name": "@webong/kvlite",
+  "version": "0.1.0-dev.0",
+  "description": "Embedded and HTTP Node.js client for KVLite",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": "./src/index.js",
+  "files": [
+    "src/",
+    "native/",
+    "binding.gyp",
+    "README.md"
+  ],
+  "keywords": ["kvlite", "rocksdb", "key-value", "embedded", "n-api"],
+  "engines": {
+    "node": ">=18"
+  },
+  "gypfile": true,
+  "scripts": {
+    "build:native": "node-gyp rebuild",
+    "test": "bash tests/run.sh"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/webong/KVlite.git",
+    "directory": "lib/bindings/node"
+  },
+  "bugs": {
+    "url": "https://github.com/webong/KVlite/issues"
+  },
+  "homepage": "https://github.com/webong/KVlite#readme"
+}

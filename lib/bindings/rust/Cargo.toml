@@ -1,0 +1,17 @@
+[package]
+name = "kvlite"
+version = "0.1.0-dev.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Embedded Rust client for KVLite's stable C ABI"
+license = "MIT"
+repository = "https://github.com/webong/KVlite"
+homepage = "https://github.com/webong/KVlite"
+readme = "README.md"
+keywords = ["kvlite", "rocksdb", "key-value", "embedded"]
+categories = ["database"]
+
+[dependencies]
+libloading = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

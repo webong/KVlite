@@ -35,7 +35,17 @@ const (
 	statusStorage  = C.int(3)
 )
 
+// ABI version is kept in lockstep with capi/kvlite.h. Bindings use it before
+// calling the rest of the API so an accidentally mixed library/header pair
+// fails deterministically instead of corrupting data.
+const abiVersion = C.uint(1)
+
 func main() {}
+
+//export kvlite_abi_version
+func kvlite_abi_version() C.uint {
+	return abiVersion
+}
 
 func setError(out **C.char, err error) {
 	if out == nil || err == nil {

@@ -8,12 +8,18 @@
 extern "C" {
 #endif
 
+/* Incremented only for an incompatible C ABI change. */
+#define KVLITE_ABI_VERSION 1
+
 enum {
     KVLITE_OK = 0,
     KVLITE_NOT_FOUND = 1,
     KVLITE_INVALID_ARGUMENT = 2,
     KVLITE_STORAGE_ERROR = 3
 };
+
+/* Return the ABI implemented by this shared library. */
+unsigned int kvlite_abi_version(void);
 
 /*
  * Open a RocksDB directory. Build the shared library with the rocksdb tag.

@@ -23,7 +23,8 @@ the public API is still free to evolve before a first stable release.
 - A versioned, language-neutral JSON/HTTP API and OpenAPI description.
 - An optional single-node Redis RESP2-compatible server for existing Redis
   clients and CLI tools.
-- A small C ABI for Python/Rust/Node/PHP FFI wrappers that need embedded mode.
+- First-class PHP, Python, Node.js, and Rust packages built on a small,
+  versioned C ABI for embedded mode.
 
 ## Install RocksDB
 
@@ -225,23 +226,50 @@ make build-c-shared
 ```
 
 This produces `dist/libkvlite.so` and the generated Go header. The checked-in
-[`capi/kvlite.h`](capi/kvlite.h) defines the stable ABI: open/close, put/get/
+[`capi/kvlite.h`](capi/kvlite.h) defines ABI version 1: open/close, put/get/
 delete, arbitrary serialized byte payloads, TTL seconds, status codes, and one
-`kvlite_free` allocator boundary. A Python `ctypes`, Rust `libloading`, PHP FFI,
-or Node N-API wrapper can therefore be a thin adapter rather than another
-database implementation.
+`kvlite_free` allocator boundary. Each binding checks `kvlite_abi_version()`
+before it opens a database, so a mismatched native library fails cleanly.
 
 The C ABI intentionally deals in bytes. Language bindings choose their own
 serialization (JSON, MessagePack, protobuf, or a domain codec) and use
 `kvlite_put`/`kvlite_get` without exposing Go values or Go pointers across the
 boundary.
 
+### First-class language packages
+
+The source-controlled packages live in [`lib/bindings/`](lib/bindings/). They
+all expose an `open()` path for local, SQLite-style use and use the same
+versioned C library. PHP, Python, and Node also expose `connect()` for the
+public JSON/HTTP protocol, which is the right choice when several processes
+need the same database.
+
+| Language | Package | Embedded implementation | Remote implementation |
+| --- | --- | --- | --- |
+| PHP | `webong/kvlite` | PHP FFI | JSON/HTTP streams |
+| Python | `kvlite` | `ctypes` | `urllib` |
+| Node.js | `@webong/kvlite` | N-API dynamic loader | `fetch` |
+| Rust | `kvlite` | `libloading` | Use the OpenAPI or Redis client boundary |
+
+For now, build/download the matching native release and set
+`KVLITE_LIBRARY_PATH` to `libkvlite` before calling `open()`. The wrapper
+packages intentionally do not make a second copy of RocksDB. They can already
+be tested without RocksDB using an ABI-compatible mock; publishing self-
+contained package installers waits for the native release bundle to include
+RocksDB and its compression libraries with correct loader paths and notices.
+
+Run the real native integration check (build `libkvlite` against the pinned
+RocksDB container, then load it through Python `ctypes`) with:
+
+```bash
+make test-bindings-docker
+```
+
 ### Build release artifacts
 
-The version-controlled release projects live in [`lib/`](lib/): the CLI and C
-shared-library contracts are defined there, and future thin Python, Node.js,
-PHP, and Rust packages will live under `lib/bindings/`. Generated artifacts are
-kept out of Git in `dist/`.
+The version-controlled release projects live in [`lib/`](lib/): the CLI, C
+shared-library contract, and language packages are all defined there.
+Generated artifacts are kept out of Git in `dist/`.
 
 On each native target with RocksDB installed, build a versioned release layout:
 

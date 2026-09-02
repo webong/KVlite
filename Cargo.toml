@@ -1,0 +1,3 @@
+[workspace]
+members = ["lib/bindings/rust"]
+resolver = "2"

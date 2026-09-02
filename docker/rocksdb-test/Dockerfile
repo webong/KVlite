@@ -39,6 +39,7 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         libbz2-dev \
         liblz4-dev \
+        python3 \
         libsnappy-dev \
         libstdc++6 \
         libzstd-dev \

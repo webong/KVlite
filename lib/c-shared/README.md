@@ -12,6 +12,7 @@ Build only this artifact on the current native platform:
 make release-c-shared RELEASE_VERSION=v0.1.0
 ```
 
-The output contains the platform library and `include/kvlite.h`. Python,
-Node.js, PHP, and Rust adapters live above this ABI rather than embedding a
-second database implementation.
+The output contains the platform library and `include/kvlite.h`. ABI version 1
+is checked by the Python, Node.js, PHP, and Rust adapters in
+[`../bindings/`](../bindings/) before any database handle is opened; none of
+them embeds a second database implementation.

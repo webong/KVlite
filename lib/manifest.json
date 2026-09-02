@@ -1,6 +1,7 @@
 {
   "format": 1,
   "name": "kvlite",
+  "cAbiVersion": 1,
   "artifacts": [
     {
       "id": "cli",
@@ -16,6 +17,32 @@
       "releasePath": "lib/libkvlite.<platform-extension>",
       "publicHeader": "capi/kvlite.h",
       "description": "Embedded FFI library used by thin language wrappers."
+    }
+  ],
+  "bindings": [
+    {
+      "id": "php",
+      "source": "lib/bindings/php",
+      "package": "webong/kvlite",
+      "transports": ["c-abi", "http"]
+    },
+    {
+      "id": "python",
+      "source": "lib/bindings/python",
+      "package": "kvlite",
+      "transports": ["c-abi", "http"]
+    },
+    {
+      "id": "node",
+      "source": "lib/bindings/node",
+      "package": "@webong/kvlite",
+      "transports": ["c-abi", "http"]
+    },
+    {
+      "id": "rust",
+      "source": "lib/bindings/rust",
+      "package": "kvlite",
+      "transports": ["c-abi"]
     }
   ],
   "targets": {

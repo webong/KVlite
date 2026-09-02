@@ -1,0 +1,53 @@
+name: Test language bindings
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  php:
+    name: PHP FFI binding
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: ffi
+          tools: composer:v2
+      - run: composer --working-dir=lib/bindings/php validate --no-check-publish
+      - run: composer --working-dir=lib/bindings/php test
+
+  python:
+    name: Python ctypes binding
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m compileall -q lib/bindings/python/src
+      - run: bash lib/bindings/python/tests/run.sh
+
+  node:
+    name: Node N-API binding
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm --prefix lib/bindings/node test
+
+  rust:
+    name: Rust dynamic binding
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p kvlite

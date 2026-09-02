@@ -1,18 +1,29 @@
 # KVLite language bindings
 
-Thin language packages belong here as they are introduced:
+These are real, thin packages over KVLite's public boundaries—not separate
+database implementations. Every embedded binding uses ABI version 1 from
+[`../../capi/kvlite.h`](../../capi/kvlite.h), calls `kvlite_abi_version()` on
+load, and resolves a matching library in this order:
 
-- `python/` for `kvlite-python`;
-- `node/` for `@webong/kvlite`;
-- `php/` for the PHP FFI package; and
-- `rust/` for the Rust crate.
+1. an explicit library path;
+2. `KVLITE_LIBRARY_PATH`;
+3. `KVLITE_HOME/lib`; then
+4. a matching `native/<os>-<arch>` package asset or local `dist/dev` release.
 
-Each package should select one transport rather than reimplement storage:
+| Directory | Package name | Local API | Remote API | Binding test |
+| --- | --- | --- | --- | --- |
+| [`php/`](php/) | `webong/kvlite` | PHP FFI | JSON/HTTP | `composer --working-dir=lib/bindings/php test` |
+| [`python/`](python/) | `kvlite` | `ctypes` | JSON/HTTP | `bash lib/bindings/python/tests/run.sh` |
+| [`node/`](node/) | `@webong/kvlite` | N-API loader | JSON/HTTP | `npm --prefix lib/bindings/node test` |
+| [`rust/`](rust/) | `kvlite` | `libloading` | OpenAPI/Redis boundary | `cargo test -p kvlite` |
 
-1. HTTP/OpenAPI for a remote owner process;
-2. Redis for existing Redis clients; or
-3. the C shared library for SQLite-like embedded use.
+Use `open()` only when one process owns the RocksDB directory. For PHP-FPM,
+Node clusters, worker fleets, or multiple applications, run `kvlite serve` and
+use the package's `connect()` API, an OpenAPI-generated client, or a standard
+Redis client against KVLite's optional Redis endpoint.
 
-The first binding should use the release layout in [`../`](../) to locate a
-matching prebuilt shared library and fall back to a documented remote mode when
-native loading is unavailable.
+The wrappers serialize normal values as JSON and each native wrapper also has a
+raw byte API for applications that choose MessagePack, protobuf, or another
+codec. Packages are source-ready for Composer, PyPI, npm, and crates.io; the
+native asset-publishing phase remains separate because the current release
+artifact does not yet bundle RocksDB's runtime dependencies.
