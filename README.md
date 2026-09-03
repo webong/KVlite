@@ -86,7 +86,9 @@ go get github.com/webong/kvlite/extensions/redis
 
 The standalone `kvlite serve` CLI exposes HTTP/Redis as optional extensions.
 
-- Default mode keeps the linked HTTP/Redis extensions for convenience.
+`kvlite serve` defaults to `--extension-mode auto`, which keeps the linked
+HTTP/Redis extensions when they are part of the binary and falls back to
+standalone extension binaries when they are not linked.
 - Add `--extension-mode standalone` to start module-discovered standalone extension
   binaries instead of linked packages.
 

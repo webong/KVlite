@@ -17,9 +17,20 @@ import (
 )
 
 const (
+	extensionModeAuto       = "auto"
 	extensionModeLinked     = "linked"
 	extensionModeStandalone = "standalone"
 )
+
+var isHTTPExtensionLinked = func() bool {
+	_, err := kvlite.LinkedModule("http")
+	return err == nil
+}
+
+var isRedisExtensionLinked = func() bool {
+	_, err := kvlite.LinkedModule("redis")
+	return err == nil
+}
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -60,7 +71,7 @@ func run(args []string) int {
 	listen := serveFlags.String("listen", "127.0.0.1:0", "HTTP listen address")
 	token := serveFlags.String("token", "", "Bearer token required by clients")
 	maxRequestBytes := serveFlags.Int64("max-request-bytes", 64<<20, "maximum JSON request size")
-	extensionMode := serveFlags.String("extension-mode", extensionModeLinked, "extension startup mode: linked|standalone")
+	extensionMode := serveFlags.String("extension-mode", extensionModeAuto, "extension startup mode: auto|linked|standalone")
 	redisListen := serveFlags.String("redis-listen", "", "Redis RESP listen address (empty disables Redis)")
 	redisPassword := serveFlags.String("redis-password", "", "password required by Redis AUTH")
 	var driverPaths driverPathValues
@@ -79,16 +90,13 @@ func run(args []string) int {
 		}
 		*driver = *backend
 	}
-	if *driver == "" {
-		*driver = string(kvlite.DefaultDriver())
-	}
 	httpListenExplicit := listenExplicit
 
 	mode := strings.ToLower(strings.TrimSpace(*extensionMode))
 	switch mode {
-	case extensionModeLinked, extensionModeStandalone:
+	case extensionModeAuto, extensionModeLinked, extensionModeStandalone:
 	default:
-		fmt.Fprintf(os.Stderr, "kvlite: unknown extension mode %q (want linked or standalone)\n", *extensionMode)
+		fmt.Fprintf(os.Stderr, "kvlite: unknown extension mode %q (want auto, linked, or standalone)\n", *extensionMode)
 		return 2
 	}
 
@@ -111,6 +119,28 @@ func run(args []string) int {
 		return runServeStandaloneRedis(*path, *driver, *redisListen, *redisPassword)
 	}
 
+	if mode == extensionModeAuto && !isHTTPExtensionLinked() {
+		if len(driverPaths.items) > 0 {
+			fmt.Fprintln(os.Stderr, "kvlite: --driver-path requires a linked HTTP extension")
+			return 1
+		}
+		if *redisListen != "" && httpListenExplicit {
+			fmt.Fprintln(os.Stderr, "kvlite: extension-mode=auto cannot run HTTP and Redis simultaneously in one process")
+			fmt.Fprintln(os.Stderr, "Start one linked protocol or use --extension-mode=standalone for per-protocol processes.")
+			return 1
+		}
+		if *redisListen != "" && !isRedisExtensionLinked() {
+			return runServeStandaloneRedis(*path, *driver, *redisListen, *redisPassword)
+		}
+		if *redisListen == "" {
+			return runServeStandaloneHTTP(*path, *driver, *listen, *token, *maxRequestBytes, driverPaths.items)
+		}
+	}
+
+	if *driver == "" {
+		*driver = string(kvlite.DefaultDriver())
+	}
+
 	db, err := kvlite.Open(*path, kvlite.WithDriver(*driver))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
@@ -131,6 +161,7 @@ func run(args []string) int {
 		defer redisServer.Close()
 		redisURL = redisServer.URL()
 	}
+
 	server, err := kvlitehttp.Serve(db, kvlitehttp.Options{
 		ListenAddress:   *listen,
 		BearerToken:     *token,
@@ -410,10 +441,10 @@ func runModuleRun(args []string) int {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "Usage: kvlite serve --path DIR [--driver NAME] [--driver-path NAME=DIR] [--listen HOST:PORT] [--token TOKEN] [--redis-listen HOST:PORT] [--redis-password PASSWORD] [--extension-mode linked|standalone]")
+	fmt.Fprintln(os.Stderr, "Usage: kvlite serve --path DIR [--driver NAME] [--driver-path NAME=DIR] [--listen HOST:PORT] [--token TOKEN] [--redis-listen HOST:PORT] [--redis-password PASSWORD] [--extension-mode auto|linked|standalone]")
 	fmt.Fprintln(os.Stderr, "       kvlite driver list")
 	fmt.Fprintln(os.Stderr, "       kvlite module list|run <name> [args...]|verify [NAME]")
-	fmt.Fprintln(os.Stderr, "\nDefaults remain linked unless --extension-mode standalone is set.")
+	fmt.Fprintln(os.Stderr, "\nDefaults prefer linked extensions, and fall back to standalone module binaries when auto-linked extensions are missing.")
 	fmt.Fprintln(os.Stderr, "In standalone mode, only one protocol extension owns the database at a time: HTTP or Redis.")
 	fmt.Fprintln(os.Stderr, "The binary can discover installed module descriptors from KVLITE_MODULE_PATH or KVLITE_HOME/{modules,drivers}; listing them never loads code.")
 	fmt.Fprintln(os.Stderr, "Build a driver bundle with -tags kvlite_rocksdb,rocksdb; -tags kvlite_leveldb; or -tags kvlite_berkeleydb,berkeleydb, then inspect it with `kvlite driver list`.")

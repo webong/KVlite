@@ -13,6 +13,18 @@ import (
 	"github.com/webong/kvlite"
 )
 
+func withLinkedExtensionProbes(t *testing.T, httpLinked, redisLinked bool) func() {
+	t.Helper()
+	origHTTPExtensionLinked := isHTTPExtensionLinked
+	origRedisExtensionLinked := isRedisExtensionLinked
+	isHTTPExtensionLinked = func() bool { return httpLinked }
+	isRedisExtensionLinked = func() bool { return redisLinked }
+	return func() {
+		isHTTPExtensionLinked = origHTTPExtensionLinked
+		isRedisExtensionLinked = origRedisExtensionLinked
+	}
+}
+
 func TestRunRejectsUnavailableDriver(t *testing.T) {
 	if got := run([]string{"serve", "--path", t.TempDir(), "--driver", "not-a-driver"}); got != 1 {
 		t.Fatalf("run() = %d, want 1", got)
@@ -251,6 +263,97 @@ func main() {
 	}
 }
 
+func TestServeAutoFallsBackToStandaloneHTTPWhenLinkedHTTPMissing(t *testing.T) {
+	if runtime.GOOS == "js" || runtime.GOOS == "wasip1" {
+		t.Skip("standalone module execution is not supported")
+	}
+	restore := withLinkedExtensionProbes(t, false, false)
+	defer restore()
+
+	root := t.TempDir()
+	httpDirectory := filepath.Join(root, "http")
+	sourcePath := filepath.Join(httpDirectory, "main.go")
+	binaryName := "kvlite-http"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binaryPath := filepath.Join(httpDirectory, "bin", binaryName)
+	markerPath := filepath.Join(root, "serve-auto-module-marker.txt")
+
+	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	program := fmt.Sprintf(`
+package main
+
+import (
+	"flag"
+	"os"
+)
+
+func main() {
+	flags := flag.NewFlagSet("kvlite-http", flag.ContinueOnError)
+	path := flags.String("path", "", "")
+	_ = flags.String("listen", "", "")
+	_ = flags.String("driver", "", "")
+	_ = flags.String("token", "", "")
+	_ = flags.Int64("max-request-bytes", 0, "")
+	if err := flags.Parse(os.Args[1:]); err != nil {
+		panic(err)
+	}
+	if *path == "" {
+		panic("path is required")
+	}
+	_ = os.WriteFile(%q, []byte(*path), 0o600)
+}
+`, markerPath)
+	if err := os.WriteFile(sourcePath, []byte(program), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("go", "build", "-o", binaryPath, sourcePath).CombinedOutput(); err != nil {
+		t.Fatalf("go build http module executable: %v: %s", err, out)
+	}
+
+	payload, err := os.ReadFile(binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksum := sha256.Sum256(payload)
+	manifestPath := filepath.Join(httpDirectory, kvlite.ModuleManifestFilename)
+	manifest := fmt.Sprintf(`{
+  "schema_version": 1,
+  "name": "http",
+  "kind": "extension",
+  "version": "v0.1.0",
+  "module_abi": 1,
+  "capabilities": ["http-client", "http-server"],
+  "license": "Apache-2.0",
+  "artifacts": [{
+    "platform": "`+runtime.GOOS+`-`+runtime.GOARCH+`",
+    "kind": "executable",
+    "path": "bin/%s",
+    "sha256": "%s"
+  }]
+}`, binaryName, hex.EncodeToString(checksum[:]))
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("KVLITE_MODULE_PATH", root)
+	t.Setenv("KVLITE_HOME", "")
+	dataPath := filepath.Join(root, "data")
+	if got := run([]string{"serve", "--path", dataPath, "--extension-mode", "auto", "--listen", "127.0.0.1:8089"}); got != 0 {
+		t.Fatalf("run(serve auto fallback http) = %d, want 0", got)
+	}
+	written, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("standalone http marker missing: %v", err)
+	}
+	if string(written) != dataPath {
+		t.Fatalf("standalone http marker contains %q, want %q", string(written), dataPath)
+	}
+}
+
 func TestServeStandaloneModeRejectsHTTPAndRedisTogether(t *testing.T) {
 	if got := run([]string{"serve", "--path", t.TempDir(), "--extension-mode", "standalone", "--listen", "127.0.0.1:8089", "--redis-listen", "127.0.0.1:6379"}); got != 1 {
 		t.Fatalf("run(serve standalone both) = %d, want 1", got)
@@ -347,5 +450,23 @@ func main() {
 	}
 	if string(written) != dataPath {
 		t.Fatalf("standalone redis marker contains %q, want %q", string(written), dataPath)
+	}
+}
+
+func TestServeAutoRejectsRedisWithoutLinkedRedis(t *testing.T) {
+	restore := withLinkedExtensionProbes(t, false, false)
+	defer restore()
+
+	if got := run([]string{"serve", "--path", t.TempDir(), "--extension-mode", "auto", "--redis-listen", "127.0.0.1:6379"}); got != 1 {
+		t.Fatalf("run(serve auto redis no linked redis) = %d, want 1", got)
+	}
+}
+
+func TestServeAutoRejectsDriverPathWithoutLinkedHTTP(t *testing.T) {
+	restore := withLinkedExtensionProbes(t, false, true)
+	defer restore()
+
+	if got := run([]string{"serve", "--path", t.TempDir(), "--extension-mode", "auto", "--listen", "127.0.0.1:8089", "--driver-path", "rocksdb=/tmp"}); got != 1 {
+		t.Fatalf("run(serve auto driver-path fallback) = %d, want 1", got)
 	}
 }
