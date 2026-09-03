@@ -249,7 +249,7 @@ func (cfg config) driverOptions() DriverOptions {
 	}
 }
 
-func resolveLinkedDriverOrReportModule(name DriverName, driverExplicit bool) (DriverName, registeredDriver, error) {
+func resolveLinkedDriverOrReportModule(name DriverName) (DriverName, registeredDriver, error) {
 	registeredName, registered, err := registeredDriverFor(name)
 	if err == nil {
 		return registeredName, registered, nil
@@ -257,10 +257,6 @@ func resolveLinkedDriverOrReportModule(name DriverName, driverExplicit bool) (Dr
 	if !errors.Is(err, ErrDriverNotInstalled) {
 		return "", registeredDriver{}, err
 	}
-	if !driverExplicit {
-		return "", registeredDriver{}, err
-	}
-
 	module, moduleErr := ResolveModule(name)
 	if moduleErr != nil {
 		return "", registeredDriver{}, err
@@ -275,7 +271,7 @@ func resolveLinkedDriverOrReportModule(name DriverName, driverExplicit bool) (Dr
 }
 
 func openConfiguredEngine(path string, cfg config) (Engine, Backend, error) {
-	name, registered, err := resolveLinkedDriverOrReportModule(cfg.driver, cfg.driverExplicit)
+	name, registered, err := resolveLinkedDriverOrReportModule(cfg.driver)
 	if err != nil {
 		return nil, "", err
 	}

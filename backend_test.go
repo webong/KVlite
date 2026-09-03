@@ -129,6 +129,22 @@ func TestOpenRejectsUnavailableBerkeleyDBWithoutTouchingPath(t *testing.T) {
 	}
 }
 
+func TestOpenDefaultDriverReportsInstalledButNotLoadedModule(t *testing.T) {
+	root := t.TempDir()
+	manifest := testExtensionManifest(DriverRocksDB)
+	manifest.Kind = ModuleKindDriver
+	manifest.Driver = DriverRocksDB
+	writeTestModuleManifest(t, filepath.Join(root, "rocksdb"), manifest)
+
+	t.Setenv("KVLITE_MODULE_PATH", root)
+	t.Setenv("KVLITE_HOME", "")
+
+	_, err := Open(t.TempDir())
+	if !errors.Is(err, ErrDriverNotLoaded) {
+		t.Fatalf("Open() error = %v, want ErrDriverNotLoaded", err)
+	}
+}
+
 func TestOpenReportsInstalledDriverModuleWithoutLinkedAdapter(t *testing.T) {
 	root := t.TempDir()
 	manifest := testExtensionManifest("leveldb")
