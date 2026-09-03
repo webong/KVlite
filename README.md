@@ -84,14 +84,18 @@ go get github.com/webong/kvlite/extensions/http
 go get github.com/webong/kvlite/extensions/redis
 ```
 
-The standalone `kvlite serve` CLI links both extensions for you. Each remains
-an explicit opt-in: neither protocol starts as part of an ordinary embedded
-`Open`.
+The standalone `kvlite serve` CLI exposes HTTP/Redis as optional extensions.
 
-The current CLI is a convenience linked bundle. HTTP and Redis now expose the
-same module metadata as storage drivers; their independently installed
-executable form will attach to the one database-owning KVLite runtime through
-private local IPC. See [MODULES.md](MODULES.md#http-and-redis).
+- Default mode keeps the linked HTTP/Redis extensions for convenience.
+- Add `--extension-mode standalone` to start module-discovered standalone extension
+  binaries instead of linked packages.
+
+In standalone mode, only one protocol extension may own the database directory per
+CLI instance; choose either HTTP (default) or Redis.
+
+HTTP and Redis expose the same module metadata model as storage drivers. Standalone
+binaries can be discovered through the catalog via `kvlite module list` and run as
+extensions when needed.
 
 ### RocksDB driver
 

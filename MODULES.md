@@ -101,8 +101,12 @@ called. This preserves the embedded-first default while the release layer
 gains standalone protocol artifacts.
 
 The standalone transport form is an executable module started explicitly by the
-KVLite owner. It communicates with that one owner over authenticated private
-local IPC; it must not open the same database directory in a second process.
+caller. In this milestone, it owns its own `kvlite` database path directly in the
+process and does not yet use shared in-process IPC.
+
+This is sufficient for optional deployment shapes where HTTP or Redis is chosen as
+the single protocol surface for one CLI invocation.
+
 This permits installed HTTP and Redis modules without relying on Go's
 toolchain-coupled `plugin` mechanism.
 
