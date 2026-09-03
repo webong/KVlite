@@ -12,7 +12,7 @@ control.
 | [`bindings/`](bindings/) | PHP, Python, Node.js, and Rust language packages | HTTP, Redis, or C ABI |
 | [`../extensions/rocksdb/`](../extensions/rocksdb/) | Optional RocksDB storage-driver extension | `extensions/rocksdb` |
 | [`../extensions/leveldb/`](../extensions/leveldb/) | Optional pure-Go LevelDB storage-driver extension | `extensions/leveldb` |
-| [`../extensions/berkeleydb/`](../extensions/berkeleydb/) | Reserved separately licensed Berkeley DB driver descriptor | No implementation published |
+| [`../extensions/berkeleydb/`](../extensions/berkeleydb/) | Optional Berkeley DB CGo storage-driver extension | Not bundled; application owner supplies a licensed library |
 | [`../extensions/http/`](../extensions/http/) | Optional Go HTTP server/client module | `extensions/http` |
 | [`../extensions/redis/`](../extensions/redis/) | Optional Redis-compatible server module | `extensions/redis` |
 | [`manifest.json`](manifest.json) | Public artifact names and supported target inventory | `scripts/build-release.sh` |

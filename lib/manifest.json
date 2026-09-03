@@ -23,6 +23,16 @@
       "buildTags": ["kvlite_leveldb"],
       "native": false,
       "description": "Pure-Go LevelDB driver bundle."
+    },
+    {
+      "id": "berkeleydb",
+      "goModule": "github.com/webong/kvlite/extensions/berkeleydb",
+      "sourceManifest": "../extensions/berkeleydb/kvlite-module.json",
+      "manifest": "kvlite-module.json",
+      "buildTags": ["berkeleydb", "kvlite_berkeleydb"],
+      "native": true,
+      "published": false,
+      "description": "Berkeley DB C API extension. KVLite does not publish its native binary; the application owner supplies a separately licensed Berkeley DB library."
     }
   ],
   "extensions": [

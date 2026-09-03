@@ -250,5 +250,5 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       kvlite module list|verify [NAME]")
 	fmt.Fprintln(os.Stderr, "\nThe binary links KVLite's optional HTTP and Redis extensions and owns server-defined driver/path mappings.")
 	fmt.Fprintln(os.Stderr, "Installed module descriptors are discovered only from KVLITE_MODULE_PATH or KVLITE_HOME/{modules,drivers}; listing them never loads code.")
-	fmt.Fprintln(os.Stderr, "Build a driver bundle with -tags kvlite_rocksdb,rocksdb or -tags kvlite_leveldb, then inspect it with `kvlite driver list`.")
+	fmt.Fprintln(os.Stderr, "Build a driver bundle with -tags kvlite_rocksdb,rocksdb; -tags kvlite_leveldb; or -tags kvlite_berkeleydb,berkeleydb, then inspect it with `kvlite driver list`.")
 }

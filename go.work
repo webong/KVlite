@@ -5,6 +5,7 @@ use (
 	./capi
 	./cmd/kvlite
 	./examples/basic
+	./extensions/berkeleydb
 	./extensions/http
 	./extensions/leveldb
 	./extensions/redis
@@ -12,6 +13,7 @@ use (
 )
 
 replace github.com/webong/kvlite v0.1.0 => .
+replace github.com/webong/kvlite/extensions/berkeleydb v0.1.0 => ./extensions/berkeleydb
 replace github.com/webong/kvlite/extensions/http v0.1.0 => ./extensions/http
 replace github.com/webong/kvlite/extensions/leveldb v0.1.0 => ./extensions/leveldb
 replace github.com/webong/kvlite/extensions/redis v0.1.0 => ./extensions/redis

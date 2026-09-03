@@ -108,13 +108,14 @@ C shared library and/or `kvlite` executable containing core plus that driver;
 language bindings can use it without compiling Go or RocksDB.
 
 All optional source modules now live under `extensions/*`: RocksDB, LevelDB,
-the future Berkeley DB driver descriptor, HTTP, and Redis. Linked Go modules
+Berkeley DB, HTTP, and Redis. Linked Go modules
 register the same metadata as their standalone bundles. This keeps the normal
 Go development workflow working while giving all consumers one catalog format.
 A future native-module loader will use a stable C initialization function (for
 example `kvlite_module_init_v1`), not Go runtime plugins.
 
-`extensions/berkeleydb` is intentionally metadata and documentation only. It
-does not make Berkeley DB available or change licensing for any other KVLite
-module; the target remains `ErrDriverNotInstalled` until a separately licensed
-implementation and artifact are released.
+`extensions/berkeleydb` is a CGo adapter, not a Berkeley DB binary
+distribution. It does not change licensing for any other KVLite module and is
+absent from standard release bundles. The application owner must explicitly
+provide a Berkeley DB distribution under terms it is entitled to use; otherwise
+the driver reports `ErrBerkeleyDBNotBuilt`.

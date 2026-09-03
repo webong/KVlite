@@ -80,6 +80,9 @@ case "$driver" in
     build_tags="kvlite_leveldb"
     native_driver=0
     ;;
+  berkeleydb)
+    fail "Berkeley DB bundles are deliberately excluded from the standard release workflow; build a private, license-reviewed bundle with make build-cli or make build-c-shared"
+    ;;
   *) fail "unsupported driver: $driver (expected rocksdb or leveldb)" ;;
 esac
 

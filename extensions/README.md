@@ -8,7 +8,7 @@ including storage-engine drivers.
 | --- | --- | --- | --- |
 | [`rocksdb/`](rocksdb/) | Driver | `github.com/webong/kvlite/extensions/rocksdb` | Requires the `rocksdb` build tag and a compatible RocksDB library. |
 | [`leveldb/`](leveldb/) | Driver | `github.com/webong/kvlite/extensions/leveldb` | Pure-Go LevelDB implementation. |
-| [`berkeleydb/`](berkeleydb/) | Driver descriptor | Not published | Reserved separately licensed driver; no implementation or artifact is supplied yet. |
+| [`berkeleydb/`](berkeleydb/) | Driver | `github.com/webong/kvlite/extensions/berkeleydb` | CGo-only; the application owner supplies a licensed Berkeley DB C library. |
 | [`http/`](http/) | Transport | `github.com/webong/kvlite/extensions/http` | Explicit JSON/HTTP owner and client extension. |
 | [`redis/`](redis/) | Transport | `github.com/webong/kvlite/extensions/redis` | Explicit Redis RESP2 server extension. |
 
@@ -28,8 +28,9 @@ standalone native bundles. The metadata describes a module but does not start a
 listener, load an artifact, or select a local database path. See
 [the module contract](../MODULES.md).
 
-There is intentionally no importable Berkeley DB package until an
-implementation, distribution, and license policy have been published.
+Berkeley DB is importable only as an explicit CGo extension. It is excluded
+from default bundles and requires a Berkeley DB distribution the application
+owner is entitled to use.
 
 Each implemented nested module is versioned independently. New release tags
 use paths such as `extensions/leveldb/v0.1.0` and

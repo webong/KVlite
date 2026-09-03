@@ -2,9 +2,9 @@
   "schema_version": 1,
   "name": "berkeleydb",
   "kind": "driver",
-  "version": "unreleased",
+  "version": "v0.1.0",
   "module_abi": 1,
   "driver": "berkeleydb",
-  "capabilities": ["embedded-storage"],
-  "license": "LicenseRef-BerkeleyDB-separate-distribution"
+  "capabilities": ["embedded-storage", "native-cgo", "license-gated"],
+  "license": "LicenseRef-Oracle-BerkeleyDB-separate-distribution"
 }

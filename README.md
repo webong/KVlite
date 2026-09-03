@@ -19,8 +19,7 @@ ultimately install prebuilt module artifacts rather than compile KVLite.
 ## What is included
 
 - An extension registry: import only `extensions/rocksdb`,
-  `extensions/leveldb`, or a future independently licensed Berkeley DB driver,
-  then use `WithDriver`.
+  `extensions/leveldb`, or `extensions/berkeleydb`, then use `WithDriver`.
 - Automatic JSON encoding for strings, numbers, structs, slices, and maps.
 - A pluggable `Codec` interface with the codec name stored beside every value.
 - Per-key and per-hash-field TTLs with exact read-time expiry.
@@ -53,10 +52,12 @@ db, err := kvlite.Open("./app-data", kvlite.WithDriver("rocksdb"))
 ```
 
 `extensions/leveldb` is pure Go. `extensions/rocksdb` needs the `rocksdb`
-build tag and the native library. A future `extensions/berkeleydb` remains
-entirely outside the core module and its license obligations apply only to users
-who install it. See [`extensions/`](extensions/) for the unified module layout;
-there are no alternate Go driver import paths.
+build tag and the native library. `extensions/berkeleydb` is CGo-only and
+requires a separately chosen Berkeley DB distribution; the owner of a
+Berkeley DB-enabled binary must comply with that distribution's terms. It
+remains outside the core module and default bundles. See
+[`extensions/`](extensions/) for the unified module layout; there are no
+alternate Go driver import paths.
 
 Released driver bundles include a checksummed `kvlite-module.json`. Set
 `KVLITE_MODULE_PATH` or `KVLITE_HOME` and inspect artifacts without loading
@@ -211,9 +212,9 @@ configuration-driven applications.
 
 `rocksdb` remains the compatibility default for `Open(path)`, but it is not
 linked unless `extensions/rocksdb` is imported. `leveldb` is a pure-Go optional
-extension. `berkeleydb` is a reserved target name and returns
-`ErrDriverNotInstalled` until a separately distributed, license-reviewed
-driver is released.
+extension. `berkeleydb` is an opt-in native extension: without its explicit
+import and `berkeleydb` build tag it returns `ErrDriverNotInstalled`; with the
+import but without native support it returns `ErrBerkeleyDBNotBuilt`.
 
 On first open, KVLite writes `KVLITE-MANIFEST.json` beside the database files
 with the selected driver, implementation identity, and KVLite format version.

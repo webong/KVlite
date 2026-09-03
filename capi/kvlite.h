@@ -31,7 +31,8 @@ int kvlite_open(const char *path, unsigned long long *out_handle, char **out_err
 
 /*
  * Open a KVLite directory through one explicit driver name, such as
- * "rocksdb" or "leveldb". This is an additive ABI v1 symbol: callers that
+ * "rocksdb", "leveldb", or a separately installed driver such as
+ * "berkeleydb". This is an additive ABI v1 symbol: callers that
  * need to work with an older v1 library should keep using kvlite_open for the
  * default driver. A database directory records its selected driver and is
  * never interchangeable with a directory from another driver.

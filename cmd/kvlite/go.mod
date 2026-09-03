@@ -4,6 +4,7 @@ go 1.23
 
 require (
 	github.com/webong/kvlite v0.1.0
+	github.com/webong/kvlite/extensions/berkeleydb v0.1.0
 	github.com/webong/kvlite/extensions/http v0.1.0
 	github.com/webong/kvlite/extensions/leveldb v0.1.0
 	github.com/webong/kvlite/extensions/redis v0.1.0
@@ -17,6 +18,8 @@ require (
 )
 
 replace github.com/webong/kvlite => ../..
+
+replace github.com/webong/kvlite/extensions/berkeleydb => ../../extensions/berkeleydb
 
 replace github.com/webong/kvlite/extensions/http => ../../extensions/http
 

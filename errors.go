@@ -57,5 +57,5 @@ var (
 	// ErrBerkeleyDBNotBuilt is deliberately separate from a generic backend
 	// error so callers can explain that Berkeley DB needs an explicit,
 	// license-reviewed distribution choice.
-	ErrBerkeleyDBNotBuilt = errors.New("kvlite: Berkeley DB support is not built; choose and package a licensed Berkeley DB distribution first")
+	ErrBerkeleyDBNotBuilt = fmt.Errorf("%w: Berkeley DB support is not built; rebuild with -tags berkeleydb and link a licensed Berkeley DB distribution", ErrDriverUnavailable)
 )
