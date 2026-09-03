@@ -99,10 +99,10 @@ They register their manifests when imported and start only when `Serve` is
 called. This preserves the embedded-first default while the release layer
 gains standalone protocol artifacts.
 
-The standalone transport form will be an executable module started explicitly
-by the KVLite owner. It will communicate with that one owner over authenticated
-private local IPC; it must not open the same RocksDB directory in a second
-process. This permits installed HTTP and Redis modules without relying on Go's
+The standalone transport form is an executable module started explicitly by the
+KVLite owner. It communicates with that one owner over authenticated private
+local IPC; it must not open the same database directory in a second process.
+This permits installed HTTP and Redis modules without relying on Go's
 toolchain-coupled `plugin` mechanism.
 
 ## Current release transition

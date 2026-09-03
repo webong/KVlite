@@ -5,10 +5,20 @@ RESP server for KVLite. The root `kvlite` module remains embedded-only: an
 ordinary `Open` never imports or starts a network listener.
 
 This is the linked Go implementation. Its `kvlite-module.json` uses the same
-catalog contract as drivers, so a future standalone Redis executable can be
-installed and discovered without compiling a host application. It will attach
-to the single KVLite database owner over private local IPC; it will not open a
-second copy of a RocksDB directory. See [the module contract](../../MODULES.md).
+catalog contract as drivers, so a standalone executable form can be installed
+and discovered without compiling a host application. It will attach to the
+single KVLite database owner over private local IPC; it will not open a second
+copy of a database directory. See [the module contract](../../MODULES.md).
+
+There is also a standalone entrypoint that can be shipped separately from
+applications:
+
+```bash
+kvlite-redis --path ./data --driver leveldb --listen 127.0.0.1:6379 --password "$KVLITE_PASSWORD"
+```
+
+The binary supports `--max-clients`, prints its listener URL on startup, and
+exits with `Ctrl-C` when you stop ownership of the server.
 
 ```bash
 go get github.com/webong/kvlite/extensions/redis

@@ -257,14 +257,14 @@ func resolveLinkedDriverOrReportModule(name DriverName) (DriverName, registeredD
 	if !errors.Is(err, ErrDriverNotInstalled) {
 		return "", registeredDriver{}, err
 	}
-	module, moduleErr := ResolveModule(name)
+	module, moduleErr := ResolveModule(string(name))
 	if moduleErr != nil {
 		return "", registeredDriver{}, err
 	}
 	if module.Manifest.Kind != ModuleKindDriver {
 		return "", registeredDriver{}, fmt.Errorf("%w: installed module %q is not a driver module", ErrDriverNotLoaded, name)
 	}
-	if _, _, err := module.ArtifactForCurrentPlatform(ModuleArtifactCShared, ModuleArtifactExecutable); err != nil {
+	if _, err := module.ArtifactForCurrentPlatform(ModuleArtifactCShared, ModuleArtifactExecutable); err != nil {
 		return "", registeredDriver{}, fmt.Errorf("%w: installed driver %q is available, but this binary did not load its adapter: %v", ErrDriverNotLoaded, name, err)
 	}
 	return "", registeredDriver{}, fmt.Errorf("%w: installed driver %q has a runtime module at %s that is not linked into this process", ErrDriverNotLoaded, name, module.Manifest.Name)
