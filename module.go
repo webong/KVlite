@@ -253,6 +253,27 @@ func ResolveModule(name string, paths ...string) (Module, error) {
 	return LinkedModule(name)
 }
 
+// ResolveModuleExecutable resolves an installed module that exposes an executable
+// artifact for the current platform. Linked modules are not eligible because they
+// already exist in-process and cannot be re-executed.
+func ResolveModuleExecutable(name string, paths ...string) (Module, ModuleArtifact, error) {
+	module, err := ResolveModule(name, paths...)
+	if err != nil {
+		return Module{}, ModuleArtifact{}, err
+	}
+	if module.Linked {
+		return Module{}, ModuleArtifact{}, fmt.Errorf("%w: module %q is linked into this process", ErrModuleNoExecutable, module.Manifest.Name)
+	}
+	artifact, err := module.ArtifactForCurrentPlatform(ModuleArtifactExecutable)
+	if err != nil {
+		return Module{}, ModuleArtifact{}, fmt.Errorf("%w: module %q", ErrModuleNoExecutable, module.Manifest.Name)
+	}
+	if err := module.Verify(); err != nil {
+		return Module{}, ModuleArtifact{}, err
+	}
+	return module, artifact, nil
+}
+
 // ArtifactForCurrentPlatform returns the matching packaged artifact. Optional
 // kinds limit the acceptable artifact kinds; when omitted, any artifact type
 // is considered.

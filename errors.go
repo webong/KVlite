@@ -31,6 +31,9 @@ var (
 	// ErrDriverNotInstalled because HTTP, Redis, codecs, and other optional
 	// capabilities are modules too.
 	ErrModuleNotInstalled = errors.New("kvlite: module is not installed")
+	// ErrModuleNoExecutable means a module is known but it has no standalone
+	// executable artifact to launch directly.
+	ErrModuleNoExecutable = errors.New("kvlite: module has no standalone executable")
 	// ErrModuleManifestInvalid means a discovered module descriptor is malformed
 	// or unsafe to load. KVLite never guesses from an arbitrary library name.
 	ErrModuleManifestInvalid = errors.New("kvlite: module manifest is invalid")

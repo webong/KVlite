@@ -25,7 +25,14 @@ db, err := kvlite.Open("./data", kvlite.WithDriver("leveldb"))
 
 Each extension publishes the same `kvlite-module.json` contract used by
 standalone native bundles. The metadata describes a module but does not start a
-listener, load an artifact, or select a local database path. See
+listener, load an artifact, or select a local database path by itself. You can
+execute an installed standalone module artifact with:
+
+```bash
+kvlite module run redis -- --path ./data --listen 127.0.0.1:6379
+```
+
+See
 [the module contract](../MODULES.md).
 
 Berkeley DB is importable only as an explicit CGo extension. It is excluded

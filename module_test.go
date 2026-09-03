@@ -221,6 +221,58 @@ func TestResolveModulePrefersInstalledArtifactThenLinkedModule(t *testing.T) {
 	}
 }
 
+func TestResolveModuleExecutable(t *testing.T) {
+	root := t.TempDir()
+	executableDirectory := filepath.Join(root, "redis")
+	executablePath := filepath.Join(executableDirectory, "bin", "kvlite-redis")
+	if err := os.MkdirAll(filepath.Dir(executablePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("redis extension executable")
+	if err := os.WriteFile(executablePath, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checksum := sha256.Sum256(payload)
+	manifest := testExtensionManifest("redis")
+	manifest.Artifacts = []ModuleArtifact{{
+		Platform: runtime.GOOS + "-" + runtime.GOARCH,
+		Kind:     ModuleArtifactExecutable,
+		Path:     filepath.ToSlash("bin/kvlite-redis"),
+		SHA256:   hex.EncodeToString(checksum[:]),
+	}}
+	writeTestModuleManifest(t, executableDirectory, manifest)
+
+	module, artifact, err := ResolveModuleExecutable("redis", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if module.Manifest.Name != "redis" {
+		t.Fatalf("ResolveModuleExecutable() module = %#v", module.Manifest)
+	}
+	if artifact.Kind != ModuleArtifactExecutable {
+		t.Fatalf("ResolveModuleExecutable() artifact = %#v", artifact)
+	}
+	if artifact.Path != filepath.ToSlash("bin/kvlite-redis") {
+		t.Fatalf("ResolveModuleExecutable() artifact = %#v, want path bin/kvlite-redis", artifact)
+	}
+
+	if err := os.WriteFile(executablePath, []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ResolveModuleExecutable("redis", root); !errors.Is(err, ErrModuleIntegrity) {
+		t.Fatalf("ResolveModuleExecutable() error = %v, want ErrModuleIntegrity", err)
+	}
+
+	linkedName := "standalone-test-module"
+	linkedManifest := testExtensionManifest(linkedName)
+	if err := RegisterLinkedModule(linkedManifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ResolveModuleExecutable(linkedName); !errors.Is(err, ErrModuleNoExecutable) {
+		t.Fatalf("ResolveModuleExecutable() linked error = %v, want ErrModuleNoExecutable", err)
+	}
+}
+
 func TestSourceModuleManifestsAreDiscoverable(t *testing.T) {
 	modules, err := DiscoverModules("extensions")
 	if err != nil {

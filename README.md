@@ -65,6 +65,7 @@ them:
 
 ```bash
 kvlite module list
+./kvlite module run redis -- --path ./data --listen 127.0.0.1:6379
 kvlite module verify rocksdb
 ```
 

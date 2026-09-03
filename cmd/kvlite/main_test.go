@@ -3,7 +3,9 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -89,5 +91,74 @@ func TestModuleVerifyChecksDiscoveredBundle(t *testing.T) {
 	}
 	if got := run([]string{"module", "verify", "leveldb"}); got != 1 {
 		t.Fatalf("run(module verify leveldb after tamper) = %d, want 1", got)
+	}
+}
+
+func TestModuleRunExecUsesDiscoveredExecutable(t *testing.T) {
+	if runtime.GOOS == "js" || runtime.GOOS == "wasip1" {
+		t.Skip("standalone module execution is not supported")
+	}
+	root := t.TempDir()
+	executableDirectory := filepath.Join(root, "redis")
+	source := filepath.Join(executableDirectory, "main.go")
+	binaryName := "kvlite-redis"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binaryPath := filepath.Join(executableDirectory, "bin", binaryName)
+	markerPath := filepath.Join(root, "module-run-marker.txt")
+
+	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	program := fmt.Sprintf(`
+package main
+
+import (
+	"os"
+)
+
+func main() {
+	_ = os.WriteFile(%q, []byte("ran"), 0o600)
+}
+`, markerPath)
+	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("go", "build", "-o", binaryPath, source).CombinedOutput(); err != nil {
+		t.Fatalf("go build module executable: %v: %s", err, out)
+	}
+
+	payload, err := os.ReadFile(binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksum := sha256.Sum256(payload)
+	manifestPath := filepath.Join(executableDirectory, "kvlite-module.json")
+	manifest := fmt.Sprintf(`{
+  "schema_version": 1,
+  "name": "redis",
+  "kind": "extension",
+  "version": "v0.1.0",
+  "module_abi": 1,
+  "capabilities": ["redis-resp2", "redis-server"],
+  "license": "Apache-2.0",
+  "artifacts": [{
+    "platform": "` + runtime.GOOS + `-` + runtime.GOARCH + `",
+    "kind": "executable",
+    "path": "bin/` + binaryName + `",
+    "sha256": "` + hex.EncodeToString(checksum[:]) + `"
+  }]
+}`)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KVLITE_MODULE_PATH", root)
+	t.Setenv("KVLITE_HOME", "")
+	if got := run([]string{"module", "run", "redis"}); got != 0 {
+		t.Fatalf("run(module run redis) = %d, want 0", got)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("module executable marker missing: %v", err)
 	}
 }

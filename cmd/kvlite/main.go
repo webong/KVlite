@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sort"
 	"strings"
@@ -162,7 +163,7 @@ func runDriver(args []string) int {
 
 func runModule(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: kvlite module list|verify [NAME]")
+		fmt.Fprintln(os.Stderr, "Usage: kvlite module list|run|verify [NAME]")
 		return 2
 	}
 	switch args[0] {
@@ -172,6 +173,18 @@ func runModule(args []string) int {
 			return 2
 		}
 		return runModuleList()
+	case "run":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: kvlite module run <name> [args]")
+			return 2
+		}
+		return runModuleRun(args[1:])
+	case "exec":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: kvlite module exec <name> [args]")
+			return 2
+		}
+		return runModuleRun(args[1:])
 	case "verify":
 		if len(args) > 2 {
 			fmt.Fprintln(os.Stderr, "Usage: kvlite module verify [NAME]")
@@ -244,10 +257,62 @@ func printModule(module kvlite.Module, source string) {
 	fmt.Printf("%s\tkind=%s\tversion=%s\tsource=%s\tpath=%s\n", manifest.Name, manifest.Kind, manifest.Version, source, module.Directory)
 }
 
+func runModuleRun(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: kvlite module run <name> [args]")
+		return 2
+	}
+	name := args[0]
+	subargs := args[1:]
+	module, artifact, err := kvlite.ResolveModuleExecutable(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
+		return 1
+	}
+	artifactPath, err := module.ArtifactPath(artifact)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kvlite: module %s artifact path error: %v\n", name, err)
+		return 1
+	}
+	cmd := exec.Command(artifactPath, subargs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "kvlite: start module %q: %v\n", name, err)
+		return 1
+	}
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case sig := <-signals:
+			_ = cmd.Process.Signal(sig)
+		case <-stop:
+		}
+	}()
+	waitErr := cmd.Wait()
+	signal.Stop(signals)
+	close(stop)
+
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			if status := exitErr.ProcessState.ExitCode(); status > 0 {
+				return status
+			}
+		}
+		fmt.Fprintf(os.Stderr, "kvlite: module %q exited with error: %v\n", name, waitErr)
+		return 1
+	}
+	return 0
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, "Usage: kvlite serve --path DIR [--driver NAME] [--driver-path NAME=DIR] [--listen HOST:PORT] [--token TOKEN] [--redis-listen HOST:PORT] [--redis-password PASSWORD]")
 	fmt.Fprintln(os.Stderr, "       kvlite driver list")
-	fmt.Fprintln(os.Stderr, "       kvlite module list|verify [NAME]")
+	fmt.Fprintln(os.Stderr, "       kvlite module list|run <name> [args...]|verify [NAME]")
 	fmt.Fprintln(os.Stderr, "\nThe binary links KVLite's optional HTTP and Redis extensions and owns server-defined driver/path mappings.")
 	fmt.Fprintln(os.Stderr, "Installed module descriptors are discovered only from KVLITE_MODULE_PATH or KVLITE_HOME/{modules,drivers}; listing them never loads code.")
 	fmt.Fprintln(os.Stderr, "Build a driver bundle with -tags kvlite_rocksdb,rocksdb; -tags kvlite_leveldb; or -tags kvlite_berkeleydb,berkeleydb, then inspect it with `kvlite driver list`.")
