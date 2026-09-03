@@ -22,10 +22,27 @@ enum {
 unsigned int kvlite_abi_version(void);
 
 /*
- * Open a RocksDB directory. Build the shared library with the rocksdb tag.
- * On failure, *out_error receives a malloc'd message released by kvlite_free.
+ * Open a KVLite directory through the bundle's default driver. A driver bundle
+ * registers exactly the drivers it ships; use kvlite_open_with_driver to name
+ * one explicitly. On failure, *out_error receives a malloc'd message released
+ * by kvlite_free.
  */
 int kvlite_open(const char *path, unsigned long long *out_handle, char **out_error);
+
+/*
+ * Open a KVLite directory through one explicit driver name, such as
+ * "rocksdb" or "leveldb". This is an additive ABI v1 symbol: callers that
+ * need to work with an older v1 library should keep using kvlite_open for the
+ * default driver. A database directory records its selected driver and is
+ * never interchangeable with a directory from another driver.
+ * On failure, *out_error receives a malloc'd message released by kvlite_free.
+ */
+int kvlite_open_with_backend(const char *path, const char *backend,
+                             unsigned long long *out_handle, char **out_error);
+
+/* Preferred spelling for kvlite_open_with_backend. Both remain ABI v1. */
+int kvlite_open_with_driver(const char *path, const char *driver,
+                            unsigned long long *out_handle, char **out_error);
 
 /* Close an owner handle. Closing invalidates the handle. */
 int kvlite_close(unsigned long long handle, char **out_error);

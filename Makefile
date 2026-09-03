@@ -1,17 +1,19 @@
-.PHONY: test test-race test-rocksdb test-rocksdb-docker test-rocksdb-compat test-bindings-docker vet build-cli build-c-shared release release-cli release-c-shared
+.PHONY: test test-race test-rocksdb test-rocksdb-docker test-rocksdb-compat test-bindings-docker test-bindings-leveldb vet build-cli build-c-shared release release-cli release-c-shared
 
 RELEASE_VERSION ?= dev
 RELEASE_TARGET ?= $(shell go env GOHOSTOS)-$(shell go env GOHOSTARCH)
 ROCKSDB_VERSION ?= v10.8.3
+DRIVER ?= rocksdb
+DRIVER_TAGS ?= $(if $(filter rocksdb,$(DRIVER)),rocksdb kvlite_rocksdb,kvlite_leveldb)
 
 test:
-	go test ./...
+	go test . ./capi ./cmd/kvlite ./drivers/leveldb/... ./drivers/rocksdb/...
 
 test-race:
-	go test -race ./...
+	go test -race . ./capi ./cmd/kvlite ./drivers/leveldb/... ./drivers/rocksdb/...
 
 test-rocksdb:
-	go test -tags rocksdb ./...
+	go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./drivers/rocksdb/... ./examples/basic
 
 test-rocksdb-docker:
 	ROCKSDB_VERSION="$(ROCKSDB_VERSION)" bash ./scripts/test-rocksdb-docker.sh
@@ -27,24 +29,29 @@ test-rocksdb-compat:
 test-bindings-docker:
 	bash ./scripts/test-bindings-docker.sh
 
+# Build a pure-Go LevelDB c-shared library and exercise the real Python ctypes
+# driver-selection path without requiring RocksDB headers or Docker.
+test-bindings-leveldb:
+	bash ./scripts/test-bindings-leveldb.sh
+
 vet:
-	go vet ./...
+	go vet . ./capi ./cmd/kvlite ./drivers/leveldb/... ./drivers/rocksdb/...
 
 build-cli:
 	mkdir -p dist
-	go build -tags rocksdb -o dist/kvlite ./cmd/kvlite
+	go build -tags '$(DRIVER_TAGS)' -o dist/kvlite ./cmd/kvlite
 
 build-c-shared:
 	mkdir -p dist
-	go build -tags rocksdb -buildmode=c-shared -o dist/libkvlite.so ./capi
+	go build -tags '$(DRIVER_TAGS)' -buildmode=c-shared -o dist/libkvlite.so ./capi
 
 # Build distributable artifacts for the current native platform. RocksDB uses
 # cgo, so release builds intentionally run on the matching OS and CPU.
 release:
-	bash ./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)"
+	bash ./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --driver "$(DRIVER)"
 
 release-cli:
-	bash ./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --component cli
+	bash ./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --driver "$(DRIVER)" --component cli
 
 release-c-shared:
-	bash ./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --component c-shared
+	bash ./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --driver "$(DRIVER)" --component c-shared

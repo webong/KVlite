@@ -28,7 +28,7 @@ function check(bool $condition, string $message): void
 $library = $argv[1] ?? '';
 check($library !== '', 'mock library path is required');
 
-$database = KVLite::open('/tmp/kvlite-php-mock', $library);
+$database = KVLite::open('/tmp/kvlite-php-mock', $library, driver: 'leveldb');
 $database->put('user:101', ['id' => 101, 'name' => 'Ada'], 60);
 check($database->get('user:101') === ['id' => 101, 'name' => 'Ada'], 'native JSON round trip failed');
 $database->putBytes("binary\0key", "value\0bytes");
@@ -41,6 +41,9 @@ try {
 }
 $database->close();
 
+// `backend` remains an embedded-call compatibility alias.
+KVLite::open('/tmp/kvlite-php-legacy-backend', $library, 'leveldb')->close();
+
 $requests = [];
 $remote = new HttpDatabase('http://127.0.0.1:8089', 'secret', 5, static function (string $method, string $url, ?string $body, array $headers) use (&$requests): array {
     $requests[] = [$method, $url, $body, $headers];
@@ -48,12 +51,13 @@ $remote = new HttpDatabase('http://127.0.0.1:8089', 'secret', 5, static function
         'PUT', 'DELETE' => [204, ''],
         'GET' => [200, '{"enabled":true}'],
     };
-});
+}, 'leveldb');
 $remote->put('flags:101', ['enabled' => true], 30);
 check($remote->get('flags:101') === ['enabled' => true], 'HTTP JSON round trip failed');
 $remote->delete('flags:101');
 check(count($requests) === 3, 'HTTP request count mismatch');
 check(str_contains($requests[0][1], 'ttl_seconds=30'), 'HTTP TTL was not sent');
 check(in_array('Authorization: Bearer secret', $requests[0][3], true), 'HTTP token was not sent');
+check(in_array('X-KVLite-Driver: leveldb', $requests[0][3], true), 'HTTP driver was not sent');
 
 fwrite(STDOUT, "PHP binding tests passed\n");

@@ -98,8 +98,9 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" != 'tag' ]]; then
             version="dev-${GITHUB_SHA:0:12}"
           fi
-          go test -tags rocksdb ./...
-          make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}"
+          go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./drivers/rocksdb/... ./examples/basic
+          make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=rocksdb
+          make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=leveldb
 
       - uses: actions/upload-artifact@v4
         with:

@@ -2,7 +2,7 @@
 //
 // Build with:
 //
-//	go build -tags rocksdb -buildmode=c-shared -o libkvlite.so ./capi
+//	go build -tags 'rocksdb,kvlite_rocksdb' -buildmode=c-shared -o libkvlite.so ./capi
 package main
 
 /*
@@ -112,7 +112,7 @@ func kvlite_open(path *C.char, outHandle *C.ulonglong, outError **C.char) C.int 
 	if path == nil || outHandle == nil {
 		return statusFor(fmt.Errorf("%w: path and output handle are required", kvlite.ErrInvalidArgument), outError)
 	}
-	db, err := kvlite.Open(C.GoString(path))
+	db, err := kvlite.Open(C.GoString(path), kvlite.WithDriver(string(kvlite.DefaultDriver())))
 	if err != nil {
 		return statusFor(err, outError)
 	}
@@ -123,6 +123,33 @@ func kvlite_open(path *C.char, outHandle *C.ulonglong, outError **C.char) C.int 
 	databases.Unlock()
 	*outHandle = C.ulonglong(handle)
 	return statusOK
+}
+
+func openWithDriver(path *C.char, driver *C.char, outHandle *C.ulonglong, outError **C.char) C.int {
+	if path == nil || driver == nil || outHandle == nil {
+		return statusFor(fmt.Errorf("%w: path, driver, and output handle are required", kvlite.ErrInvalidArgument), outError)
+	}
+	db, err := kvlite.Open(C.GoString(path), kvlite.WithDriver(C.GoString(driver)))
+	if err != nil {
+		return statusFor(err, outError)
+	}
+	databases.Lock()
+	handle := databases.next
+	databases.next++
+	databases.items[handle] = db
+	databases.Unlock()
+	*outHandle = C.ulonglong(handle)
+	return statusOK
+}
+
+//export kvlite_open_with_backend
+func kvlite_open_with_backend(path *C.char, backend *C.char, outHandle *C.ulonglong, outError **C.char) C.int {
+	return openWithDriver(path, backend, outHandle, outError)
+}
+
+//export kvlite_open_with_driver
+func kvlite_open_with_driver(path *C.char, driver *C.char, outHandle *C.ulonglong, outError **C.char) C.int {
+	return openWithDriver(path, driver, outHandle, outError)
 }
 
 //export kvlite_close

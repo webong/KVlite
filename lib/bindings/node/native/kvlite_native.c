@@ -21,6 +21,7 @@ enum {
 
 typedef unsigned int (*kvlite_abi_version_fn)(void);
 typedef int (*kvlite_open_fn)(const char *, unsigned long long *, char **);
+typedef int (*kvlite_open_with_backend_fn)(const char *, const char *, unsigned long long *, char **);
 typedef int (*kvlite_close_fn)(unsigned long long, char **);
 typedef int (*kvlite_put_fn)(unsigned long long, const void *, size_t, const void *, size_t, long long, char **);
 typedef int (*kvlite_get_fn)(unsigned long long, const void *, size_t, void **, size_t *, char **);
@@ -37,6 +38,7 @@ typedef struct {
 #endif
   kvlite_abi_version_fn abi_version;
   kvlite_open_fn open;
+  kvlite_open_with_backend_fn open_with_backend;
   kvlite_close_fn close;
   kvlite_put_fn put;
   kvlite_get_fn get;
@@ -181,6 +183,13 @@ static bool load_api(napi_env env, const char *path) {
 } while (0)
   RESOLVE(abi_version, "kvlite_abi_version", kvlite_abi_version_fn);
   RESOLVE(open, "kvlite_open", kvlite_open_fn);
+  /* This additive ABI v1 symbol is optional so the default open() path still
+   * works with an older compatible libkvlite release. Prefer the driver name
+   * and then fall back to the original backend-named alias. */
+  api.open_with_backend = (kvlite_open_with_backend_fn)load_symbol(api.library, "kvlite_open_with_driver");
+  if (api.open_with_backend == NULL) {
+    api.open_with_backend = (kvlite_open_with_backend_fn)load_symbol(api.library, "kvlite_open_with_backend");
+  }
   RESOLVE(close, "kvlite_close", kvlite_close_fn);
   RESOLVE(put, "kvlite_put", kvlite_put_fn);
   RESOLVE(get, "kvlite_get", kvlite_get_fn);
@@ -226,6 +235,52 @@ static napi_value native_open(napi_env env, napi_callback_info info) {
   char *native_error = NULL;
   int status = api.open(path, &handle, &native_error);
   free(path);
+  free(library_path);
+  if (status != KVLITE_OK) {
+    return throw_status(env, status, native_error);
+  }
+  napi_value result;
+  if (!check(env, napi_create_bigint_uint64(env, handle, &result), "Unable to create a KVLite handle")) {
+    return NULL;
+  }
+  return result;
+}
+
+static napi_value native_open_with_backend(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value args[3];
+  if (!check(env, napi_get_cb_info(env, info, &argc, args, NULL, NULL), "Unable to read KVLite arguments")) {
+    return NULL;
+  }
+  if (argc != 3) {
+    return throw_error(env, "KVLITE_INVALID_ARGUMENT", "openWithBackend requires database path, backend, and libkvlite path");
+  }
+  char *path = copy_string(env, args[0], "database path");
+  char *backend = copy_string(env, args[1], "storage backend");
+  char *library_path = copy_string(env, args[2], "libkvlite path");
+  if (path == NULL || backend == NULL || library_path == NULL) {
+    free(path);
+    free(backend);
+    free(library_path);
+    return NULL;
+  }
+  if (!load_api(env, library_path)) {
+    free(path);
+    free(backend);
+    free(library_path);
+    return NULL;
+  }
+  if (api.open_with_backend == NULL) {
+    free(path);
+    free(backend);
+    free(library_path);
+    return throw_error(env, "KVLITE_NATIVE_LIBRARY", "This KVLite native library does not support selecting a storage backend. Upgrade libkvlite.");
+  }
+  unsigned long long handle = 0;
+  char *native_error = NULL;
+  int status = api.open_with_backend(path, backend, &handle, &native_error);
+  free(path);
+  free(backend);
   free(library_path);
   if (status != KVLITE_OK) {
     return throw_status(env, status, native_error);
@@ -351,6 +406,7 @@ static napi_value native_delete(napi_env env, napi_callback_info info) {
 static napi_value init(napi_env env, napi_value exports) {
   napi_property_descriptor properties[] = {
       {"open", NULL, native_open, NULL, NULL, NULL, napi_default, NULL},
+      {"openWithBackend", NULL, native_open_with_backend, NULL, NULL, NULL, napi_default, NULL},
       {"close", NULL, native_close, NULL, NULL, NULL, napi_default, NULL},
       {"put", NULL, native_put, NULL, NULL, NULL, napi_default, NULL},
       {"get", NULL, native_get, NULL, NULL, NULL, napi_default, NULL},

@@ -7,6 +7,7 @@
 use std::env;
 use std::ffi::{CStr, CString};
 use std::fmt::{Display, Formatter};
+use std::fs;
 use std::os::raw::{c_char, c_int, c_void};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -22,6 +23,7 @@ const STATUS_INVALID_ARGUMENT: c_int = 2;
 
 type AbiVersionFn = unsafe extern "C" fn() -> u32;
 type OpenFn = unsafe extern "C" fn(*const c_char, *mut u64, *mut *mut c_char) -> c_int;
+type OpenWithBackendFn = unsafe extern "C" fn(*const c_char, *const c_char, *mut u64, *mut *mut c_char) -> c_int;
 type CloseFn = unsafe extern "C" fn(u64, *mut *mut c_char) -> c_int;
 type PutFn = unsafe extern "C" fn(u64, *const c_void, usize, *const c_void, usize, i64, *mut *mut c_char) -> c_int;
 type GetFn = unsafe extern "C" fn(u64, *const c_void, usize, *mut *mut c_void, *mut usize, *mut *mut c_char) -> c_int;
@@ -95,21 +97,58 @@ impl Database {
     /// optional native-artifact directory. Use [`Database::open_with_library`]
     /// to select one explicit native-library file.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Self::open_inner(path.as_ref(), None)
+        Self::open_inner(path.as_ref(), None, "rocksdb", false)
     }
 
     /// Open a directory using one explicit `libkvlite` shared-library path.
     pub fn open_with_library(path: impl AsRef<Path>, library_path: impl AsRef<Path>) -> Result<Self> {
-        Self::open_inner(path.as_ref(), Some(library_path.as_ref()))
+        Self::open_inner(path.as_ref(), Some(library_path.as_ref()), "rocksdb", false)
     }
 
-    fn open_inner(path: &Path, library_path: Option<&Path>) -> Result<Self> {
+    /// Open a directory through an explicit KVLite storage backend, such as
+    /// `"leveldb"`. The native library must include the additive backend
+    /// selection symbol introduced in KVLite ABI v1.
+    pub fn open_with_backend(path: impl AsRef<Path>, backend: impl AsRef<str>) -> Result<Self> {
+        Self::open_inner(path.as_ref(), None, backend.as_ref(), true)
+    }
+
+    /// Open a directory through an explicit KVLite storage driver. This is the
+    /// preferred name for [`Database::open_with_backend`].
+    pub fn open_with_driver(path: impl AsRef<Path>, driver: impl AsRef<str>) -> Result<Self> {
+        Self::open_with_backend(path, driver)
+    }
+
+    /// Open a directory through an explicit storage backend and native library.
+    pub fn open_with_library_and_backend(
+        path: impl AsRef<Path>,
+        library_path: impl AsRef<Path>,
+        backend: impl AsRef<str>,
+    ) -> Result<Self> {
+        Self::open_inner(path.as_ref(), Some(library_path.as_ref()), backend.as_ref(), true)
+    }
+
+    /// Open a directory with both an explicit library and an explicit KVLite
+    /// storage driver. This is the preferred name for
+    /// [`Database::open_with_library_and_backend`].
+    pub fn open_with_library_and_driver(
+        path: impl AsRef<Path>,
+        library_path: impl AsRef<Path>,
+        driver: impl AsRef<str>,
+    ) -> Result<Self> {
+        Self::open_with_library_and_backend(path, library_path, driver)
+    }
+
+    fn open_inner(path: &Path, library_path: Option<&Path>, backend: &str, explicit_driver: bool) -> Result<Self> {
         if path.as_os_str().is_empty() {
             return Err(Error::InvalidArgument("KVLite database path is required.".into()));
         }
+        let backend = backend.trim().to_ascii_lowercase();
+        if backend.is_empty() {
+            return Err(Error::InvalidArgument("KVLite storage backend is required.".into()));
+        }
         let path = CString::new(path.to_string_lossy().as_bytes())
             .map_err(|_| Error::InvalidArgument("KVLite database path cannot contain a NUL byte.".into()))?;
-        let library_path = LibraryFinder::find(library_path)?;
+        let library_path = LibraryFinder::find(library_path, Some(&backend))?;
         // SAFETY: Functions are resolved below, retained with the Library, and
         // only invoked with the exact C ABI declared in capi/kvlite.h.
         let library = unsafe { Library::new(&library_path) }
@@ -122,7 +161,6 @@ impl Database {
                 "KVLite native ABI mismatch: this Rust crate needs ABI {ABI_VERSION}, got {version}."
             )));
         }
-        let open: OpenFn = unsafe { symbol(&library, b"kvlite_open\0")? };
         let functions = Functions {
             close: unsafe { symbol(&library, b"kvlite_close\0")? },
             put: unsafe { symbol(&library, b"kvlite_put\0")? },
@@ -132,8 +170,22 @@ impl Database {
         };
         let mut handle = 0;
         let mut native_error = std::ptr::null_mut();
-        // SAFETY: path is NUL-terminated; all output pointers are valid for the call.
-        let status = unsafe { open(path.as_ptr(), &mut handle, &mut native_error) };
+        let status = if !explicit_driver {
+            let open: OpenFn = unsafe { symbol(&library, b"kvlite_open\0")? };
+            // SAFETY: path is NUL-terminated; all output pointers are valid for the call.
+            unsafe { open(path.as_ptr(), &mut handle, &mut native_error) }
+        } else {
+            let backend = CString::new(backend)
+                .map_err(|_| Error::InvalidArgument("KVLite storage backend cannot contain a NUL byte.".into()))?;
+            let open: OpenWithBackendFn = unsafe { library.get::<OpenWithBackendFn>(b"kvlite_open_with_driver\0") }
+                .or_else(|_| unsafe { library.get::<OpenWithBackendFn>(b"kvlite_open_with_backend\0") })
+                .map(|symbol| *symbol)
+                .map_err(|_| Error::NativeLibrary(
+                    "This KVLite native library does not support selecting a storage driver. Upgrade libkvlite.".into(),
+                ))?;
+            // SAFETY: path and backend are NUL-terminated; all output pointers are valid for the call.
+            unsafe { open(path.as_ptr(), backend.as_ptr(), &mut handle, &mut native_error) }
+        };
         check_status(functions.free, status, native_error)?;
 
         Ok(Self {
@@ -235,7 +287,7 @@ impl Database {
             return Ok(());
         };
         let mut native_error = std::ptr::null_mut();
-        // SAFETY: native_error is writable and handle was returned by kvlite_open.
+        // SAFETY: native_error is writable and handle was returned by KVLite's open API.
         let status = unsafe { (self.functions.close)(handle, &mut native_error) };
         check_status(self.functions.free, status, native_error)?;
         self.handle = None;
@@ -257,7 +309,7 @@ impl Drop for Database {
 pub struct LibraryFinder;
 
 impl LibraryFinder {
-    pub fn find(requested_path: Option<&Path>) -> Result<PathBuf> {
+    pub fn find(requested_path: Option<&Path>, driver: Option<&str>) -> Result<PathBuf> {
         let mut candidates = Vec::new();
         if let Some(path) = requested_path {
             candidates.push(path.to_path_buf());
@@ -266,11 +318,21 @@ impl LibraryFinder {
             candidates.push(PathBuf::from(path));
         }
         if let Some(home) = env::var_os("KVLITE_HOME") {
-            candidates.push(PathBuf::from(home).join("lib").join(Self::library_name()));
+            let home = PathBuf::from(home);
+            if let Some(driver) = driver {
+                candidates.push(home.join("drivers").join(driver).join("lib").join(Self::library_name()));
+            }
+            if let Some(bundle) = Self::sole_driver_bundle(&home) {
+                candidates.push(bundle);
+            }
+            candidates.push(home.join("lib").join(Self::library_name()));
         }
         let package_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let target = Self::target();
         candidates.push(package_root.join("native").join(&target).join(Self::library_name()));
+        if let Some(driver) = driver {
+            candidates.push(package_root.join("../../../dist/dev").join(&target).join("drivers").join(driver).join("lib").join(Self::library_name()));
+        }
         candidates.push(package_root.join("../../../dist/dev").join(&target).join("lib").join(Self::library_name()));
 
         if let Some(path) = candidates.iter().find(|path| path.is_file()) {
@@ -312,6 +374,16 @@ impl LibraryFinder {
             env::consts::ARCH
         };
         format!("{os}-{architecture}")
+    }
+
+    fn sole_driver_bundle(home: &Path) -> Option<PathBuf> {
+        let bundles = fs::read_dir(home.join("drivers"))
+            .ok()?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path().join("lib").join(Self::library_name()))
+            .filter(|path| path.is_file())
+            .collect::<Vec<_>>();
+        (bundles.len() == 1).then(|| bundles.into_iter().next()).flatten()
     }
 }
 

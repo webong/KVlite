@@ -14,11 +14,14 @@ final class HttpDatabase implements Store
     /** @var (callable(string, string, ?string, array<int, string>): array{0: int, 1: string})|null */
     private $requester;
 
+    private readonly ?string $driver;
+
     public function __construct(
         private readonly string $baseUrl,
         private readonly ?string $token = null,
         private readonly int $timeoutSeconds = 30,
         ?callable $requester = null,
+        ?string $driver = null,
     ) {
         $parts = parse_url($baseUrl);
         if (!is_array($parts) || !isset($parts['scheme'], $parts['host']) || !in_array($parts['scheme'], ['http', 'https'], true)) {
@@ -27,7 +30,14 @@ final class HttpDatabase implements Store
         if ($timeoutSeconds <= 0) {
             throw new InvalidArgumentException('KVLite HTTP timeout must be positive.');
         }
+        if ($driver !== null) {
+            $driver = strtolower(trim($driver));
+            if ($driver === '') {
+                throw new InvalidArgumentException('KVLite remote driver must be a non-empty string when provided.');
+            }
+        }
         $this->requester = $requester;
+        $this->driver = $driver;
     }
 
     public function put(string $key, mixed $value, int $ttlSeconds = 0): void
@@ -83,6 +93,9 @@ final class HttpDatabase implements Store
         }
         if ($this->token !== null && $this->token !== '') {
             $headers[] = 'Authorization: Bearer '.$this->token;
+        }
+        if ($this->driver !== null) {
+            $headers[] = 'X-KVLite-Driver: '.$this->driver;
         }
         $url = rtrim($this->baseUrl, '/').$path;
 

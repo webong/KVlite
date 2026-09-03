@@ -24,22 +24,41 @@ class KVLite:
     def open(
         path: str | os.PathLike[str],
         library_path: str | os.PathLike[str] | None = None,
+        backend: str = "rocksdb",
+        *,
+        driver: str | None = None,
     ) -> NativeDatabase:
-        return NativeDatabase.open(path, library_path)
+        return NativeDatabase.open(path, library_path, backend, driver=driver)
 
     @staticmethod
-    def connect(base_url: str, token: str | None = None, timeout_seconds: float = 30) -> HttpDatabase:
-        return HttpDatabase(base_url, token, timeout_seconds)
+    def connect(
+        base_url: str,
+        token: str | None = None,
+        timeout_seconds: float = 30,
+        driver: str | None = None,
+    ) -> HttpDatabase:
+        return HttpDatabase(base_url, token, timeout_seconds, driver=driver)
 
 
-def open(path: str | os.PathLike[str], library_path: str | os.PathLike[str] | None = None) -> NativeDatabase:
+def open(
+    path: str | os.PathLike[str],
+    library_path: str | os.PathLike[str] | None = None,
+    backend: str = "rocksdb",
+    *,
+    driver: str | None = None,
+) -> NativeDatabase:
     """Open an embedded KVLite database through the C shared library."""
-    return KVLite.open(path, library_path)
+    return KVLite.open(path, library_path, backend, driver=driver)
 
 
-def connect(base_url: str, token: str | None = None, timeout_seconds: float = 30) -> HttpDatabase:
-    """Connect to a KVLite owner process over its stable JSON/HTTP API."""
-    return KVLite.connect(base_url, token, timeout_seconds)
+def connect(
+    base_url: str,
+    token: str | None = None,
+    timeout_seconds: float = 30,
+    driver: str | None = None,
+) -> HttpDatabase:
+    """Connect to a KVLite owner process and optionally select an exposed driver."""
+    return KVLite.connect(base_url, token, timeout_seconds, driver)
 
 
 __all__ = [

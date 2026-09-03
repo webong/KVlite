@@ -1,32 +1,55 @@
 # KVLite
 
-KVLite is a small, typed Go layer over RocksDB. It turns RocksDB's byte-oriented
-C API into a developer-friendly embedded store with conservative defaults,
-automatic JSON serialization, per-record TTLs, collections, and optional HTTP
-and Redis-compatible endpoints. Go is the implementation language, not the
-required application language: other languages use the JSON/HTTP protocol, a
-normal Redis client, or the embedded C ABI.
+KVLite is an engine-neutral, typed key-value core. Storage engines are normal
+optional driver modules—not dependencies pulled into every application. The
+core provides serialization, per-record TTLs, collections, metadata checks,
+migrations, and HTTP/Redis/C-ABI surfaces; a driver supplies the local storage
+engine. Go is the implementation language, not the required application
+language: other languages use JSON/HTTP, Redis, or a driver-specific C bundle.
 
 This repository is an MVP: the storage format is versioned and tested, while
 the public API is still free to evolve before a first stable release.
 
 ## What is included
 
-- `Open(path)` with a bounded SSD-oriented RocksDB profile.
+- A driver registry: import only `drivers/rocksdb`, `drivers/leveldb`, or a
+  future independently licensed Berkeley DB driver, then use `WithDriver`.
 - Automatic JSON encoding for strings, numbers, structs, slices, and maps.
 - A pluggable `Codec` interface with the codec name stored beside every value.
 - Per-key and per-hash-field TTLs with exact read-time expiry.
 - Hashes, string sets, and typed lists implemented with collision-safe key
   namespaces.
-- An optional authenticated HTTP owner/client mode for multi-process access.
-- A RocksDB compaction filter that physically discards expired value envelopes.
+- An optional authenticated HTTP owner/client mode where clients select a
+  server-exposed driver name, never a filesystem path.
+- A RocksDB compaction filter that physically discards expired value envelopes;
+  every backend still enforces TTL logically at read time.
+- A persistent driver manifest that prevents one engine from accidentally
+  opening a KVLite directory initialized for another engine.
 - A versioned, language-neutral JSON/HTTP API and OpenAPI description.
 - An optional single-node Redis RESP2-compatible server for existing Redis
   clients and CLI tools.
 - First-class PHP, Python, Node.js, and Rust packages built on a small,
   versioned C ABI for embedded mode.
 
-## Install RocksDB
+## Install one driver
+
+The core module imports no storage engine. Pick one driver explicitly:
+
+```go
+import (
+	"github.com/webong/kvlite"
+	_ "github.com/webong/kvlite/drivers/rocksdb"
+)
+
+db, err := kvlite.Open("./app-data", kvlite.WithDriver("rocksdb"))
+```
+
+`drivers/leveldb` is pure Go. `drivers/rocksdb` needs the `rocksdb` build tag
+and the native library. A future `drivers/berkeleydb` remains entirely outside
+the core module and its license obligations apply only to users who install it.
+See [`drivers/`](drivers/) for the module and release-tag contract.
+
+### RocksDB driver
 
 KVLite uses [`github.com/linxGnu/grocksdb`](https://github.com/linxGnu/grocksdb),
 which calls RocksDB through cgo. KVLite deliberately uses the portable C API
@@ -43,19 +66,21 @@ brew install rocksdb
 ROCKS_PREFIX="$(brew --prefix rocksdb)"
 CGO_CFLAGS="-I${ROCKS_PREFIX}/include" \
 CGO_LDFLAGS="-L${ROCKS_PREFIX}/lib" \
-go test -tags rocksdb ./...
+go test -tags rocksdb ./drivers/rocksdb/...
 ```
 
 On Linux, install the RocksDB development package supplied by the distribution,
 then run:
 
 ```bash
-go test -tags rocksdb ./...
+go test -tags rocksdb ./drivers/rocksdb/...
 ```
 
-The `rocksdb` build tag is deliberate: consumers can run package-level tests,
-codec tests, and remote-client builds without requiring native headers. Calling
-`Open` without the tag returns `ErrRocksDBNotBuilt`; `OpenRemote` remains usable.
+The `rocksdb` build tag is deliberate: consumers can run core, codec, and
+remote-client builds without native headers. Calling `Open(path)` asks for the
+compatibility default `rocksdb`; if no driver was imported it returns
+`ErrDriverNotInstalled`, and if the imported RocksDB driver lacks native
+support it returns `ErrRocksDBNotBuilt`.
 
 ### Native RocksDB tests in Docker
 
@@ -67,8 +92,8 @@ make test-rocksdb-docker
 ```
 
 The helper builds `docker/rocksdb-test/Dockerfile`, compiles a pinned RocksDB
-source release, installs the cgo linker dependencies, and runs
-`go test -tags rocksdb ./...`. The equivalent command is
+source release, installs the cgo linker dependencies, and runs the core,
+RocksDB driver, CLI, C ABI, and example suites. The equivalent command is
 `docker compose -f compose.rocksdb.yml run --rm --build rocksdb-test`.
 
 KVLite's Docker compatibility check runs both ends of the supported range:
@@ -92,6 +117,7 @@ import (
 	"time"
 
 	"github.com/webong/kvlite"
+	_ "github.com/webong/kvlite/drivers/rocksdb"
 )
 
 type User struct {
@@ -100,7 +126,7 @@ type User struct {
 }
 
 func main() {
-	db, err := kvlite.Open("./kvlite-data")
+	db, err := kvlite.Open("./kvlite-data", kvlite.WithDriver("rocksdb"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -127,6 +153,33 @@ Build it with:
 go run -tags rocksdb ./examples/basic
 ```
 
+## Choose a storage driver
+
+Choose the underlying engine when the local owner opens the directory. The
+blank import is what installs the Go driver into this process:
+
+```go
+import _ "github.com/webong/kvlite/drivers/leveldb"
+
+db, err := kvlite.Open("./kvlite-level-data", kvlite.WithDriver("leveldb"))
+```
+
+`kvlite.WithDriver("leveldb")` is the equivalent string-friendly form for
+configuration-driven applications.
+
+`rocksdb` remains the compatibility default for `Open(path)`, but it is not
+linked unless `drivers/rocksdb` is imported. `leveldb` is a pure-Go optional
+module. `berkeleydb` is a reserved target name and returns
+`ErrDriverNotInstalled` until a separately distributed, license-reviewed
+driver is released.
+
+On first open, KVLite writes `KVLITE-MANIFEST.json` beside the database files
+with the selected driver, implementation identity, and KVLite format version.
+Later opens must select the same target. This is one KVLite API, not one shared
+on-disk format: moving between engines requires a logical copy of records into
+a new KVLite path. A legacy KVLite RocksDB path without a manifest can be
+adopted by reopening it through the unchanged default `Open(path)` path.
+
 ## Collections
 
 ```go
@@ -141,21 +194,27 @@ var jobs []Job
 _ = db.LRange(ctx, "jobs", 0, -1, &jobs)
 ```
 
-Hashes and sets use one RocksDB key per field/member. Lists use a compact,
+Hashes and sets use one underlying-engine key per field/member. Lists use a compact,
 length-delimited record and are atomically updated by the database owner,
 including when the update comes through the HTTP client.
 
 ## Use KVLite from any language
 
 The easiest cross-language deployment is to run the owner binary and speak the
-JSON API. The owner is the only process that opens the RocksDB directory; every
-other language uses ordinary HTTP and never needs RocksDB headers.
+JSON API. The server owns every local path; every other language uses HTTP and
+never needs native database headers or filesystem access.
 
 Start the owner:
 
 ```bash
-go build -tags rocksdb -o kvlite ./cmd/kvlite
-./kvlite serve --path ./kvlite-data --listen 127.0.0.1:8089 --token "$KVLITE_TOKEN"
+go build -tags 'rocksdb,kvlite_rocksdb' -o kvlite ./cmd/kvlite
+./kvlite serve --driver rocksdb --path ./kvlite-data --listen 127.0.0.1:8089 --token "$KVLITE_TOKEN"
+```
+
+Inspect the compiled bundle before serving it:
+
+```bash
+./kvlite driver list
 ```
 
 Write and read from any shell:
@@ -164,9 +223,11 @@ Write and read from any shell:
 KEY=$(printf user:101 | base64 | tr '+/' '-_' | tr -d '=\n')
 curl -fsS -X PUT "http://127.0.0.1:8089/v1/entries/$KEY?ttl_seconds=3600" \
   -H 'Content-Type: application/json' \
+  -H 'X-KVLite-Driver: rocksdb' \
   -H "Authorization: Bearer $KVLITE_TOKEN" \
   -d '{"id":101,"name":"Ada"}'
 curl -fsS "http://127.0.0.1:8089/v1/entries/$KEY" \
+  -H 'X-KVLite-Driver: rocksdb' \
   -H "Authorization: Bearer $KVLITE_TOKEN"
 ```
 
@@ -175,6 +236,19 @@ The [`examples/python`](examples/python) and [`examples/node`](examples/node)
 clients use only their languages' standard HTTP libraries; equivalent clients
 can be generated from the OpenAPI document.
 
+For a server that exposes more than one installed driver, the server owner
+maps each driver to its own path. A client may select only one of those named
+mappings; it cannot make the server open an arbitrary path:
+
+```bash
+go build -tags 'rocksdb,kvlite_rocksdb,kvlite_leveldb' -o kvlite ./cmd/kvlite
+./kvlite serve --driver rocksdb --path ./rocks-data \
+  --driver-path leveldb=./level-data --listen 127.0.0.1:8089
+```
+
+An unavailable request returns structured `driver_not_installed`,
+`driver_unavailable`, or `driver_not_exposed` JSON rather than falling back.
+
 ### Redis-compatible server
 
 KVLite can also expose the same database through a Redis-compatible RESP2
@@ -182,9 +256,10 @@ endpoint. This is useful when an application already speaks Redis or when you
 want to inspect a local database with `redis-cli`:
 
 ```bash
-go build -tags rocksdb -o kvlite ./cmd/kvlite
+go build -tags 'rocksdb,kvlite_rocksdb' -o kvlite ./cmd/kvlite
 ./kvlite serve \
   --path ./kvlite-data \
+  --driver rocksdb \
   --listen 127.0.0.1:8089 \
   --redis-listen 127.0.0.1:6379 \
   --redis-password "$KVLITE_REDIS_PASSWORD"
@@ -213,7 +288,9 @@ handshake commands (`AUTH`, `HELLO`, `CLIENT`, `SELECT`, and `COMMAND`).
 Unsupported commands return a normal Redis `ERR` response. It is intentionally
 a single-node protocol gateway: replication, Sentinel, cluster routing,
 streams, sorted sets, Lua, and transactions are not part of this milestone.
-The process that opens the path remains the sole RocksDB owner.
+Redis exposes the server's primary driver mapping. Standard Redis clients have
+no request-header mechanism, so use KVLite's HTTP clients when one remote
+process needs to select another driver mapping.
 Keep the Redis listener on loopback or set `--redis-password` before binding it
 to a non-local interface; this endpoint does not provide TLS.
 
@@ -222,14 +299,17 @@ to a non-local interface; this endpoint does not provide TLS.
 For a SQLite-like embedded integration, build the C-compatible shared library:
 
 ```bash
-make build-c-shared
+make build-c-shared DRIVER=leveldb
 ```
 
-This produces `dist/libkvlite.so` and the generated Go header. The checked-in
-[`capi/kvlite.h`](capi/kvlite.h) defines ABI version 1: open/close, put/get/
-delete, arbitrary serialized byte payloads, TTL seconds, status codes, and one
-`kvlite_free` allocator boundary. Each binding checks `kvlite_abi_version()`
-before it opens a database, so a mismatched native library fails cleanly.
+This produces a driver-specific `dist/libkvlite.so` bundle and the generated Go
+header. The checked-in [`capi/kvlite.h`](capi/kvlite.h) defines ABI version 1:
+`kvlite_open` for the bundle's default driver, additive
+`kvlite_open_with_driver` (and the compatible `kvlite_open_with_backend`
+alias), close, put/get/delete, arbitrary
+serialized byte payloads, TTL seconds, status codes, and one `kvlite_free`
+allocator boundary. Each binding checks `kvlite_abi_version()` before it opens
+a database, so a mismatched native library fails cleanly.
 
 The C ABI intentionally deals in bytes. Language bindings choose their own
 serialization (JSON, MessagePack, protobuf, or a domain codec) and use
@@ -252,11 +332,15 @@ need the same database.
 | Rust | `kvlite` | `libloading` | Use the OpenAPI or Redis client boundary |
 
 For now, build/download the matching native release and set
-`KVLITE_LIBRARY_PATH` to `libkvlite` before calling `open()`. The wrapper
-packages intentionally do not make a second copy of RocksDB. They can already
-be tested without RocksDB using an ABI-compatible mock; publishing self-
-contained package installers waits for the native release bundle to include
-RocksDB and its compression libraries with correct loader paths and notices.
+`KVLITE_LIBRARY_PATH` to `libkvlite` before calling `open()`. Embedded wrappers
+use their bundle's default driver unless given an optional driver name (for
+example, `leveldb`); remote `connect()` clients may send a driver selection
+that the server validates against its
+server-owned mappings. The wrapper packages intentionally do not make a second
+copy of RocksDB. They can already be tested
+without RocksDB using an ABI-compatible mock; publishing self-contained package
+installers waits for the native release bundle to include RocksDB and its
+compression libraries with correct loader paths and notices.
 
 Run the real native integration check (build `libkvlite` against the pinned
 RocksDB container, then load it through Python `ctypes`) with:
@@ -265,21 +349,29 @@ RocksDB container, then load it through Python `ctypes`) with:
 make test-bindings-docker
 ```
 
+The pure-Go LevelDB shared-library path is checked locally without Docker:
+
+```bash
+make test-bindings-leveldb
+```
+
 ### Build release artifacts
 
 The version-controlled release projects live in [`lib/`](lib/): the CLI, C
 shared-library contract, and language packages are all defined there.
 Generated artifacts are kept out of Git in `dist/`.
 
-On each native target with RocksDB installed, build a versioned release layout:
+Build one separately installable driver bundle on each native target:
 
 ```bash
-make release RELEASE_VERSION=v0.1.0
+make release RELEASE_VERSION=v0.1.0 DRIVER=leveldb
+make release RELEASE_VERSION=v0.1.0 DRIVER=rocksdb
 ```
 
 This emits the CLI, the platform shared library, the reviewed `kvlite.h` ABI
-header, and `SHA256SUMS` under `dist/v0.1.0/<os>-<arch>/`. Because RocksDB is a
-cgo/C++ dependency, the script intentionally refuses cross-compilation; the
+header, and `SHA256SUMS` under
+`dist/v0.1.0/<os>-<arch>/drivers/<driver>/`. Because RocksDB is a cgo/C++
+dependency, the script intentionally refuses cross-compilation; the
 included GitHub Actions workflow builds Linux and macOS artifacts on native
 runners. `windows-amd64` is already part of the release contract and can be
 built by the same script on a Windows runner once its RocksDB toolchain is
@@ -293,23 +385,31 @@ binary downloads are suitable for clean machines.
 
 ## Multi-process sharing
 
-The process that opens RocksDB remains the only owner of the database lock. It
-can expose a loopback HTTP endpoint:
+The server owns each selected driver/path pair and remains the only process
+allowed to open those database directories. It can expose a loopback HTTP
+endpoint. In an application, add blank imports for `drivers/rocksdb` and
+`drivers/leveldb` before using this configuration:
 
 ```go
-owner, err := kvlite.Open("./kvlite-data", kvlite.WithSharing(kvlite.SharingOptions{
+owner, err := kvlite.Open("./rocks-data", kvlite.WithDriver("rocksdb"), kvlite.WithSharing(kvlite.SharingOptions{
 	ListenAddress: "127.0.0.1:8089",
 	BearerToken:   os.Getenv("KVLITE_TOKEN"),
+	DriverPaths: map[kvlite.DriverName]string{
+		kvlite.DriverLevelDB: "./level-data",
+	},
 }))
 ```
 
-Another process connects without opening the RocksDB directory:
+Another process connects without opening the local database directory:
 
 ```go
 db, err := kvlite.OpenRemote("http://127.0.0.1:8089", kvlite.RemoteOptions{
 	BearerToken: os.Getenv("KVLITE_TOKEN"),
-})
+}, kvlite.WithDriver("leveldb"))
 ```
+
+When `WithDriver` is supplied, `OpenRemote` validates that selection during
+connection and returns the server's structured driver error immediately.
 
 The transport intentionally defaults to an ephemeral loopback listener when
 no address is supplied. It does not terminate TLS; use a local-only socket or a
@@ -329,7 +429,8 @@ trusted TLS reverse proxy if traffic leaves the host.
 | Periodic compaction | 1 hour | Give expired records cleanup opportunities |
 
 Use `WithMemoryBudget(bytes)` to derive the cache and memtable sizes from one
-budget instead of exposing RocksDB's full option surface.
+budget instead of exposing RocksDB's full option surface. LevelDB maps the same
+cache and write-buffer portions to its pure-Go options.
 
 ## TTL semantics
 
@@ -337,8 +438,9 @@ RocksDB's `DBWithTTL` accepts one TTL per database or column family. It does not
 provide Redis-style `Put(..., ttl)` behavior, and physical deletion only occurs
 during compaction. KVLite therefore stores an absolute expiry in each value
 envelope and enforces it during reads. An expired value is never returned; a
-read also deletes it opportunistically. The compaction filter reclaims expired
-bytes in the background.
+read also deletes it opportunistically. RocksDB's compaction filter reclaims
+expired bytes in the background; LevelDB keeps the same exact logical expiry
+behavior and removes expired records lazily on read.
 
 ## Verification
 

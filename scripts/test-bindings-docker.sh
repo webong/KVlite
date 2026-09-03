@@ -9,4 +9,4 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # suite. It creates a real libkvlite and proves the public Python ctypes
 # package can open, write, read, and close it.
 exec docker compose -f "$repo_root/compose.rocksdb.yml" run --rm --build rocksdb-test \
-  sh -c 'go build -tags rocksdb -buildmode=c-shared -o /tmp/libkvlite.so ./capi && PYTHONPATH=/workspace/lib/bindings/python/src KVLITE_LIBRARY_PATH=/tmp/libkvlite.so python3 /workspace/lib/bindings/python/tests/real_native.py'
+  sh -c 'go build -tags rocksdb,kvlite_rocksdb -buildmode=c-shared -o /tmp/libkvlite.so ./capi && PYTHONPATH=/workspace/lib/bindings/python/src KVLITE_LIBRARY_PATH=/tmp/libkvlite.so python3 /workspace/lib/bindings/python/tests/real_native.py'

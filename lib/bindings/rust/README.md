@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 struct User { id: u64, name: String }
 
-let mut db = Database::open("./data")?;
+let mut db = Database::open_with_driver("./data", "leveldb")?;
 db.put("user:101", &User { id: 101, name: "Ada".into() }, Some(Duration::from_secs(3600)))?;
 let user: User = db.get("user:101")?;
 db.close()?;
@@ -43,6 +43,17 @@ db.close()?;
 
 Use `put_bytes()` and `get_bytes()` when the application owns a MessagePack,
 protobuf, or other binary codec.
+
+`Database::open()` and `Database::open_with_library()` use the native bundle's
+default driver. Use `open_with_driver()` or `open_with_library_and_driver()`
+for `leveldb`; the older
+`*_with_backend()` names remain available for source compatibility. Explicit
+selection needs a current `libkvlite` with `kvlite_open_with_driver` (or its
+compatible `kvlite_open_with_backend` alias).
+
+For remote Rust clients, generate a client from KVLite's OpenAPI document (or
+use any HTTP/Redis client). Send `X-KVLite-Driver: leveldb` on HTTP requests;
+the server accepts it only for an installed, server-owned driver/path mapping.
 
 ## Test
 

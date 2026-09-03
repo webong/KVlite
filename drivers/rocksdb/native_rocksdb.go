@@ -1,17 +1,19 @@
 //go:build rocksdb
 
-package kvlite
+package rocksdb
 
 import (
 	"bytes"
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/linxGnu/grocksdb"
+	"github.com/webong/kvlite"
 )
 
-type rocksEngine struct {
+func nativeAvailable() error { return nil }
+
+type engine struct {
 	db      *grocksdb.DB
 	options *grocksdb.Options
 	read    *grocksdb.ReadOptions
@@ -21,31 +23,33 @@ type rocksEngine struct {
 }
 
 type expiryCompactionFilter struct {
-	now func() time.Time
+	recordExpired func([]byte) bool
 }
 
 func (filter *expiryCompactionFilter) Filter(_ int, _ []byte, value []byte) (bool, []byte) {
-	return envelopeExpired(value, filter.now()), nil
+	return filter.recordExpired(value), nil
 }
 
 func (*expiryCompactionFilter) Name() string            { return "kvlite.expiry.v1" }
 func (*expiryCompactionFilter) SetIgnoreSnapshots(bool) {}
 func (*expiryCompactionFilter) Destroy()                {}
 
-func openRocksEngine(path string, cfg config) (engine, error) {
+func openNative(path string, config kvlite.DriverOptions) (kvlite.Engine, error) {
 	options := grocksdb.NewDefaultOptions()
 	options.SetCreateIfMissing(true)
-	options.SetWriteBufferSize(uint64(cfg.writeBufferSize))
-	options.SetMaxWriteBufferNumber(cfg.maxWriteBuffers)
+	options.SetWriteBufferSize(uint64(config.WriteBufferSize))
+	options.SetMaxWriteBufferNumber(config.MaxWriteBuffers)
 	options.SetMinWriteBufferNumberToMerge(1)
-	options.SetMaxBackgroundJobs(cfg.maxBackgroundJobs)
+	options.SetMaxBackgroundJobs(config.MaxBackgroundJobs)
 	options.SetBytesPerSync(1 << 20)
 	options.SetLevelCompactionDynamicLevelBytes(true)
 	options.SetPeriodicCompactionSeconds(3600)
 	options.SetCompression(grocksdb.LZ4Compression)
-	options.SetCompactionFilter(&expiryCompactionFilter{now: cfg.now})
+	if config.RecordExpired != nil {
+		options.SetCompactionFilter(&expiryCompactionFilter{recordExpired: config.RecordExpired})
+	}
 
-	cache := grocksdb.NewLRUCache(uint64(cfg.blockCacheSize))
+	cache := grocksdb.NewLRUCache(uint64(config.BlockCacheSize))
 	blocks := grocksdb.NewDefaultBlockBasedTableOptions()
 	blocks.SetBlockCache(cache)
 	blocks.SetBlockSize(16 << 10)
@@ -63,13 +67,13 @@ func openRocksEngine(path string, cfg config) (engine, error) {
 	}
 	read := grocksdb.NewDefaultReadOptions()
 	write := grocksdb.NewDefaultWriteOptions()
-	return &rocksEngine{
+	return &engine{
 		db: database, options: options, read: read, write: write,
 		blocks: blocks, cache: cache,
 	}, nil
 }
 
-func (engine *rocksEngine) Get(ctx context.Context, key []byte) ([]byte, bool, error) {
+func (engine *engine) Get(ctx context.Context, key []byte) ([]byte, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
@@ -84,21 +88,21 @@ func (engine *rocksEngine) Get(ctx context.Context, key []byte) ([]byte, bool, e
 	return append([]byte(nil), value.Data()...), true, nil
 }
 
-func (engine *rocksEngine) Put(ctx context.Context, key, value []byte) error {
+func (engine *engine) Put(ctx context.Context, key, value []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return engine.db.Put(engine.write, key, value)
 }
 
-func (engine *rocksEngine) Delete(ctx context.Context, key []byte) error {
+func (engine *engine) Delete(ctx context.Context, key []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return engine.db.Delete(engine.write, key)
 }
 
-func (engine *rocksEngine) ScanPrefix(ctx context.Context, prefix []byte, callback func(key, value []byte) error) error {
+func (engine *engine) ScanPrefix(ctx context.Context, prefix []byte, callback func(key, value []byte) error) error {
 	iterator := engine.db.NewIterator(engine.read)
 	defer iterator.Close()
 	for iterator.Seek(prefix); iterator.Valid(); iterator.Next() {
@@ -121,7 +125,7 @@ func (engine *rocksEngine) ScanPrefix(ctx context.Context, prefix []byte, callba
 	return iterator.Err()
 }
 
-func (engine *rocksEngine) Close() error {
+func (engine *engine) Close() error {
 	engine.db.Close()
 	engine.read.Destroy()
 	engine.write.Destroy()

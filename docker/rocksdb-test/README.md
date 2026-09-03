@@ -2,7 +2,7 @@
 
 This service gives KVLite a reproducible native build environment. It uses the
 official Go Bookworm image, builds a pinned RocksDB release from source, enables
-cgo, and runs the complete suite with the `rocksdb` build tag. The default is
+cgo, and runs the complete suite with the `rocksdb,kvlite_rocksdb` build tags. The default is
 RocksDB `v10.8.3`; set `ROCKSDB_VERSION` to exercise another supported release.
 
 The image keeps compiler warnings visible but does not promote them to errors;

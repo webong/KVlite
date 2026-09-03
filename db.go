@@ -10,8 +10,9 @@ import (
 
 // DB is a concurrency-safe KVLite database handle.
 type DB struct {
-	engine engine
-	cfg    config
+	engine  Engine
+	cfg     config
+	backend Backend
 
 	mu sync.RWMutex
 	// redisMu serializes multi-step Redis commands (for example HSET and
@@ -23,8 +24,9 @@ type DB struct {
 	redis        *redisServer
 }
 
-// Open opens or creates a RocksDB-backed KVLite database. Build the package
-// with the rocksdb tag to enable the native adapter.
+// Open opens or creates a KVLite database using an installed storage driver.
+// Import a driver package (for example drivers/rocksdb or drivers/leveldb)
+// and select it with WithDriver. RocksDB remains the compatibility default.
 func Open(path string, options ...Option) (*DB, error) {
 	if path == "" {
 		return nil, fmt.Errorf("%w: database path is required", ErrInvalidArgument)
@@ -33,11 +35,11 @@ func Open(path string, options ...Option) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	storage, err := openRocksEngine(path, cfg)
+	storage, backend, err := openConfiguredEngine(path, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return newDB(storage, cfg)
+	return newDB(storage, cfg, backend)
 }
 
 func buildConfig(options []Option) (config, error) {
@@ -53,8 +55,8 @@ func buildConfig(options []Option) (config, error) {
 	return cfg, nil
 }
 
-func newDB(storage engine, cfg config) (*DB, error) {
-	db := &DB{engine: &guardedEngine{inner: storage}, cfg: cfg}
+func newDB(storage Engine, cfg config, backend Backend) (*DB, error) {
+	db := &DB{engine: &guardedEngine{inner: storage}, cfg: cfg, backend: backend}
 	if cfg.sharing != nil {
 		server, err := startShareServer(db, *cfg.sharing)
 		if err != nil {
@@ -311,7 +313,17 @@ func (db *DB) RedisAddress() string {
 	return db.redis.address()
 }
 
-// Close stops sharing and closes RocksDB. It is safe to call more than once.
+// Backend reports the selected storage driver. A remote DB without an explicit
+// WithDriver selection reports BackendRemote; an explicitly selected remote
+// driver is reported by name.
+func (db *DB) Backend() Backend {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.backend
+}
+
+// Close stops sharing and closes the selected storage backend. It is safe to
+// call more than once.
 func (db *DB) Close() error {
 	db.mu.Lock()
 	if db.closed {

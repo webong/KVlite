@@ -13,8 +13,9 @@ security:
 paths:
   /v1:
     get:
-      security: []
       summary: Discover the protocol
+      parameters:
+        - $ref: '#/components/parameters/Driver'
       responses:
         '200':
           description: Protocol metadata
@@ -22,10 +23,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Discovery'
+        '400':
+          $ref: '#/components/responses/DriverUnavailable'
+        '409':
+          $ref: '#/components/responses/DriverUnavailable'
+        '501':
+          $ref: '#/components/responses/DriverUnavailable'
   /v1/health:
     get:
-      security: []
       summary: Check server health
+      parameters:
+        - $ref: '#/components/parameters/Driver'
       responses:
         '200':
           description: Healthy
@@ -37,9 +45,16 @@ paths:
                 properties:
                   status:
                     const: ok
+        '400':
+          $ref: '#/components/responses/DriverUnavailable'
+        '409':
+          $ref: '#/components/responses/DriverUnavailable'
+        '501':
+          $ref: '#/components/responses/DriverUnavailable'
   /v1/entries/{key}:
     parameters:
       - $ref: '#/components/parameters/Key'
+      - $ref: '#/components/parameters/Driver'
     get:
       summary: Read a JSON value
       responses:
@@ -57,6 +72,10 @@ paths:
           $ref: '#/components/responses/NotFound'
         '415':
           description: The stored value was written with a non-JSON codec.
+        '409':
+          $ref: '#/components/responses/DriverUnavailable'
+        '501':
+          $ref: '#/components/responses/DriverUnavailable'
     put:
       summary: Write a JSON value
       parameters:
@@ -77,11 +96,19 @@ paths:
           description: Stored
         '400':
           description: Invalid JSON, key, or TTL
+        '409':
+          $ref: '#/components/responses/DriverUnavailable'
+        '501':
+          $ref: '#/components/responses/DriverUnavailable'
     delete:
       summary: Delete a value
       responses:
         '204':
           description: Deleted or already absent
+        '409':
+          $ref: '#/components/responses/DriverUnavailable'
+        '501':
+          $ref: '#/components/responses/DriverUnavailable'
 components:
   securitySchemes:
     bearerAuth:
@@ -96,13 +123,30 @@ components:
       schema:
         type: string
         pattern: '^[A-Za-z0-9_-]+$'
+    Driver:
+      name: X-KVLite-Driver
+      in: header
+      required: false
+      description: |
+        Optional driver name selected by the client. The server only honours a
+        name for which it has an installed, server-owned driver/path mapping;
+        clients never provide filesystem paths.
+      schema:
+        type: string
+        pattern: '^[a-z0-9][a-z0-9._-]*$'
   responses:
     NotFound:
       description: No live value exists for the key.
+    DriverUnavailable:
+      description: The requested driver is not installed, cannot run, or is not exposed by this server.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/DriverError'
   schemas:
     Discovery:
       type: object
-      required: [protocol, entries, methods]
+      required: [protocol, entries, methods, driver, backend, drivers]
       properties:
         protocol:
           type: string
@@ -114,7 +158,55 @@ components:
           type: array
           items:
             type: string
+        backend:
+          type: string
+          description: Compatibility mirror of the selected driver.
+        driver:
+          type: string
+          description: Driver selected for this discovery request.
+        drivers:
+          type: array
+          description: Driver/path mappings exposed by this server for remote selection.
+          items:
+            $ref: '#/components/schemas/Driver'
         redis:
           type: string
           format: uri
           description: Optional Redis RESP endpoint when enabled by the owner.
+    Driver:
+      type: object
+      required: [driver, backend, implementation, format, version, available, physical_ttl_compacts]
+      properties:
+        driver:
+          type: string
+        backend:
+          type: string
+        implementation:
+          type: string
+        format:
+          type: string
+        version:
+          type: string
+        available:
+          type: boolean
+        physical_ttl_compacts:
+          type: boolean
+    DriverError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [invalid_driver, driver_not_installed, driver_unavailable, driver_not_exposed]
+            driver:
+              type: string
+            available_drivers:
+              type: array
+              items:
+                type: string
+            message:
+              type: string

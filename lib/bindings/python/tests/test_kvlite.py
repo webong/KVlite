@@ -8,7 +8,7 @@ from kvlite import HttpDatabase, KVLite, NotFoundError
 
 class NativeDatabaseTests(unittest.TestCase):
     def test_json_and_binary_round_trip(self) -> None:
-        database = KVLite.open("/tmp/kvlite-python-mock", os.environ["KVLITE_TEST_LIBRARY"])
+        database = KVLite.open("/tmp/kvlite-python-mock", os.environ["KVLITE_TEST_LIBRARY"], driver="leveldb")
         self.addCleanup(database.close)
 
         database.put("user:101", {"id": 101, "name": "Ada"}, ttl_seconds=60)
@@ -19,6 +19,11 @@ class NativeDatabaseTests(unittest.TestCase):
         database.delete(b"binary\x00key")
         with self.assertRaises(NotFoundError):
             database.get_bytes(b"binary\x00key")
+        database.close()
+
+        # `backend` remains an embedded-call compatibility alias.
+        legacy = KVLite.open("/tmp/kvlite-python-legacy-backend", os.environ["KVLITE_TEST_LIBRARY"], backend="leveldb")
+        self.addCleanup(legacy.close)
 
 
 class HttpDatabaseTests(unittest.TestCase):
@@ -31,7 +36,7 @@ class HttpDatabaseTests(unittest.TestCase):
                 return 200, b'{"enabled":true}'
             return 204, b""
 
-        database = HttpDatabase("http://127.0.0.1:8089", token="secret", requester=requester)
+        database = HttpDatabase("http://127.0.0.1:8089", token="secret", driver="leveldb", requester=requester)
         database.put("flags:101", {"enabled": True}, ttl_seconds=30)
         self.assertEqual(database.get("flags:101"), {"enabled": True})
         database.delete("flags:101")
@@ -39,6 +44,7 @@ class HttpDatabaseTests(unittest.TestCase):
         self.assertEqual(len(requests), 3)
         self.assertIn("ttl_seconds=30", requests[0][1])
         self.assertEqual(requests[0][3]["Authorization"], "Bearer secret")
+        self.assertEqual(requests[0][3]["X-KVLite-Driver"], "leveldb")
 
 
 if __name__ == "__main__":

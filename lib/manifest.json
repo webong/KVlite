@@ -2,13 +2,29 @@
   "format": 1,
   "name": "kvlite",
   "cAbiVersion": 1,
+  "driverBundles": [
+    {
+      "id": "rocksdb",
+      "goModule": "github.com/webong/kvlite/drivers/rocksdb",
+      "buildTags": ["rocksdb", "kvlite_rocksdb"],
+      "native": true,
+      "description": "RocksDB driver bundle; requires the packaged RocksDB runtime and notices."
+    },
+    {
+      "id": "leveldb",
+      "goModule": "github.com/webong/kvlite/drivers/leveldb",
+      "buildTags": ["kvlite_leveldb"],
+      "native": false,
+      "description": "Pure-Go LevelDB driver bundle."
+    }
+  ],
   "artifacts": [
     {
       "id": "cli",
       "source": "cmd/kvlite",
       "kind": "executable",
       "releasePath": "bin/kvlite",
-      "description": "Owns a RocksDB directory and exposes the HTTP and Redis-compatible APIs."
+      "description": "Owns selected KVLite driver directories and exposes the HTTP and Redis-compatible APIs."
     },
     {
       "id": "c-shared",

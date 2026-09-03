@@ -6,7 +6,10 @@ import (
 	"sync"
 )
 
-type engine interface {
+// Engine is the small storage contract implemented by KVLite driver modules.
+// Drivers receive and return raw KVLite records; codecs, TTL semantics, and
+// collections stay in the engine-neutral core.
+type Engine interface {
 	Get(context.Context, []byte) ([]byte, bool, error)
 	Put(context.Context, []byte, []byte) error
 	Delete(context.Context, []byte) error
@@ -21,7 +24,7 @@ var errAtomicListPushUnsupported = errors.New("kvlite: engine does not support a
 // the actual storage lifetime.
 type guardedEngine struct {
 	mu     sync.RWMutex
-	inner  engine
+	inner  Engine
 	closed bool
 }
 

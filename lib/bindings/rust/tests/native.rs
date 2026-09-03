@@ -51,7 +51,7 @@ impl Drop for MockLibrary {
 #[test]
 fn native_json_and_binary_round_trip() {
     let mock = MockLibrary::compile();
-    let mut database = Database::open_with_library("/tmp/kvlite-rust-mock", &mock.path).unwrap();
+    let mut database = Database::open_with_library_and_backend("/tmp/kvlite-rust-mock", &mock.path, "leveldb").unwrap();
     database.put("user:101", &json!({"id": 101, "name": "Ada"}), None).unwrap();
     let user: serde_json::Value = database.get("user:101").unwrap();
     assert_eq!(user, json!({"id": 101, "name": "Ada"}));

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -92,7 +93,7 @@ func testDB(t *testing.T, options ...Option) (*DB, *memoryEngine) {
 		t.Fatal(err)
 	}
 	storage := newMemoryEngine()
-	db, err := newDB(storage, cfg)
+	db, err := newDB(storage, cfg, BackendRocksDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,6 +286,15 @@ func TestPublicJSONHTTPAPI(t *testing.T) {
 	defer discovery.Body.Close()
 	if discovery.StatusCode != http.StatusOK {
 		t.Fatalf("discovery status = %s", discovery.Status)
+	}
+	var metadata struct {
+		Backend Backend `json:"backend"`
+	}
+	if err := json.NewDecoder(discovery.Body).Decode(&metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Backend != BackendRocksDB {
+		t.Fatalf("discovery backend = %q, want %q", metadata.Backend, BackendRocksDB)
 	}
 }
 

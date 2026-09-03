@@ -31,7 +31,7 @@ export KVLITE_LIBRARY_PATH=/opt/kvlite/lib/libkvlite.dylib  # .so on Linux
 ```python
 import kvlite
 
-with kvlite.open("./data") as db:
+with kvlite.open("./data", driver="leveldb") as db:
     db.put("user:101", {"id": 101, "name": "Ada"}, ttl_seconds=3600)
     user = db.get("user:101")
 ```
@@ -39,16 +39,24 @@ with kvlite.open("./data") as db:
 `NativeDatabase` also exposes `put_bytes()` / `get_bytes()` for MessagePack,
 protobuf, or another application-owned binary codec.
 
+Without a selector, `open()` uses the native bundle's default driver: RocksDB
+for a RocksDB bundle or LevelDB for a LevelDB-only bundle. Pass
+`driver="leveldb"` when this process is the local owner. `backend=` remains a
+compatibility alias. Explicit selection needs a current `libkvlite` with
+`kvlite_open_with_driver` (or the compatible `kvlite_open_with_backend` alias).
+
 ## Remote use
 
 ```python
 import kvlite
 
-db = kvlite.connect("http://127.0.0.1:8089", token="your-token")
+db = kvlite.connect("http://127.0.0.1:8089", token="your-token", driver="leveldb")
 db.put("user:101", {"id": 101, "name": "Ada"})
 ```
 
 This path has no native dependency and uses KVLite's versioned JSON protocol.
+The client chooses a driver name only; the server returns a clear error unless
+that driver is installed and mapped to a server-owned database path.
 
 ## Test
 

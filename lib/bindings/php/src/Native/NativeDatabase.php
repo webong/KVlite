@@ -34,15 +34,22 @@ final class NativeDatabase implements Store
         $this->handle = $handle;
     }
 
-    public static function open(string $path, ?string $libraryPath = null): self
+    public static function open(string $path, ?string $libraryPath = null, string $backend = 'rocksdb', ?string $driver = null): self
     {
         if ($path === '') {
             throw new InvalidArgumentException('KVLite database path is required.');
         }
+        $explicitDriver = $driver !== null;
+        $backend = self::selectDriver($backend, $driver);
+        $explicitDriver = $explicitDriver || $backend !== 'rocksdb';
         self::assertFfiIsAvailable();
 
         try {
-            $ffi = FFI::cdef(self::definitions(), LibraryFinder::find($libraryPath));
+            $resolvedLibrary = LibraryFinder::find($libraryPath, $backend);
+            // Do not declare additive symbols here: PHP FFI resolves declared
+            // functions at cdef time on some builds, so the default ABI v1 path
+            // must still load an older libkvlite that lacks backend selection.
+            $ffi = FFI::cdef(self::definitions(), $resolvedLibrary);
         } catch (Throwable $exception) {
             if ($exception instanceof NativeLibraryException) {
                 throw $exception;
@@ -59,7 +66,26 @@ final class NativeDatabase implements Store
 
         $handle = $ffi->new('uint64_t');
         $outError = $ffi->new('char *');
-        $status = (int) $ffi->kvlite_open($path, FFI::addr($handle), FFI::addr($outError));
+        if (!$explicitDriver) {
+            // Keep the long-standing v1 default path compatible with an older
+            // native library that predates the additive backend-selection symbol.
+            $status = (int) $ffi->kvlite_open($path, FFI::addr($handle), FFI::addr($outError));
+        } else {
+            try {
+                $backendFfi = FFI::cdef(self::backendDefinitions(), $resolvedLibrary);
+                $handle = $backendFfi->new('uint64_t');
+                $outError = $backendFfi->new('char *');
+                $status = (int) $backendFfi->kvlite_open_with_backend($path, $backend, FFI::addr($handle), FFI::addr($outError));
+            } catch (Throwable $exception) {
+                throw new NativeLibraryException(
+                    'This KVLite native library does not support selecting a storage backend. Upgrade libkvlite.',
+                    0,
+                    $exception,
+                );
+            }
+            self::throwForStatus($backendFfi, $status, $outError);
+            return new self($ffi, (int) $handle->cdata);
+        }
         self::throwForStatus($ffi, $status, $outError);
 
         return new self($ffi, (int) $handle->cdata);
@@ -217,6 +243,30 @@ final class NativeDatabase implements Store
         }
     }
 
+    private static function normalizeBackend(string $backend): string
+    {
+        $backend = strtolower(trim($backend));
+        if ($backend === '') {
+            throw new InvalidArgumentException('KVLite storage backend is required.');
+        }
+
+        return $backend;
+    }
+
+    private static function selectDriver(string $backend, ?string $driver): string
+    {
+        $legacyBackend = self::normalizeBackend($backend);
+        if ($driver === null) {
+            return $legacyBackend;
+        }
+        $selectedDriver = self::normalizeBackend($driver);
+        if ($legacyBackend !== 'rocksdb' && $legacyBackend !== $selectedDriver) {
+            throw new InvalidArgumentException('KVLite driver and backend options select different storage drivers.');
+        }
+
+        return $selectedDriver;
+    }
+
     private function assertOpen(): void
     {
         if ($this->handle === 0) {
@@ -247,6 +297,21 @@ int kvlite_get(uint64_t handle, const void *key, size_t key_length,
                void **out_value, size_t *out_length, char **out_error);
 int kvlite_delete(uint64_t handle, const void *key, size_t key_length,
                   char **out_error);
+void kvlite_free(void *pointer);
+CDEF;
+    }
+
+    private static function backendDefinitions(): string
+    {
+        $sizeT = PHP_OS_FAMILY === 'Windows'
+            ? 'typedef unsigned long long size_t;'
+            : 'typedef unsigned long size_t;';
+
+        return <<<CDEF
+typedef unsigned long long uint64_t;
+{$sizeT}
+int kvlite_open_with_backend(const char *path, const char *backend,
+                             uint64_t *out_handle, char **out_error);
 void kvlite_free(void *pointer);
 CDEF;
     }

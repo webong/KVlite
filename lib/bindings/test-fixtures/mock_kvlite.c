@@ -55,6 +55,17 @@ int kvlite_open(const char *path, unsigned long long *out_handle, char **out_err
     return KVLITE_OK;
 }
 
+#ifndef KVLITE_MOCK_LEGACY_ABI
+int kvlite_open_with_backend(const char *path, const char *backend,
+                             unsigned long long *out_handle, char **out_error) {
+    if (backend == NULL || backend[0] == '\0') {
+        set_error(out_error, "backend is required");
+        return KVLITE_INVALID_ARGUMENT;
+    }
+    return kvlite_open(path, out_handle, out_error);
+}
+#endif
+
 int kvlite_close(unsigned long long handle, char **out_error) {
     if (!valid_handle(handle, out_error)) {
         return KVLITE_INVALID_ARGUMENT;

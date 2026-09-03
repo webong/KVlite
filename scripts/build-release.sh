@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
-# Build the CLI and/or C shared library into a reproducible release layout.
-# RocksDB is linked through cgo, therefore each target must be built natively
-# with that target's RocksDB headers, library, compiler, and linker available.
+# Build one driver-specific CLI and/or C shared library bundle into a
+# reproducible release layout. RocksDB is linked through cgo, therefore its
+# bundle must be built natively with matching headers, library, compiler, and
+# linker available.
 
 set -euo pipefail
 
@@ -15,6 +16,7 @@ Build KVLite artifacts for the current native platform.
 Options:
   --version VERSION       Release version used in dist/VERSION (default: dev)
   --target OS-ARCH        Native target, such as darwin-arm64 (default: host)
+  --driver NAME           Driver bundle: rocksdb or leveldb (default: rocksdb)
   --component NAME        Build cli or c-shared; repeat to choose both
   --help                  Show this help
 
@@ -31,6 +33,7 @@ fail() {
 
 version="dev"
 target="$(go env GOHOSTOS)-$(go env GOHOSTARCH)"
+driver="rocksdb"
 components=()
 
 while (($# > 0)); do
@@ -43,6 +46,11 @@ while (($# > 0)); do
     --target)
       (($# >= 2)) || fail "--target requires a value"
       target="$2"
+      shift 2
+      ;;
+    --driver)
+      (($# >= 2)) || fail "--driver requires a value"
+      driver="$2"
       shift 2
       ;;
     --component)
@@ -62,6 +70,18 @@ done
 
 [[ "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]] || fail "version may contain only letters, numbers, ., _, +, and -"
 
+case "$driver" in
+  rocksdb)
+    build_tags="rocksdb,kvlite_rocksdb"
+    native_driver=1
+    ;;
+  leveldb)
+    build_tags="kvlite_leveldb"
+    native_driver=0
+    ;;
+  *) fail "unsupported driver: $driver (expected rocksdb or leveldb)" ;;
+esac
+
 case "$target" in
   linux-amd64|linux-arm64|darwin-amd64|darwin-arm64|windows-amd64) ;;
   *) fail "unsupported target: $target" ;;
@@ -71,8 +91,6 @@ host_target="$(go env GOHOSTOS)-$(go env GOHOSTARCH)"
 go_target="$(go env GOOS)-$(go env GOARCH)"
 [[ "$target" == "$host_target" ]] || fail "target $target is not native to this host ($host_target)"
 [[ "$go_target" == "$host_target" ]] || fail "GOOS/GOARCH select $go_target; unset them for a native $host_target build"
-[[ "$(go env CGO_ENABLED)" == "1" ]] || fail "CGO_ENABLED must be 1 to build against RocksDB"
-
 if ((${#components[@]} == 0)); then
   components=(cli c-shared)
 fi
@@ -83,6 +101,14 @@ for component in "${components[@]}"; do
     *) fail "unsupported component: $component" ;;
   esac
 done
+
+needs_cgo="$native_driver"
+for component in "${components[@]}"; do
+  [[ "$component" == "c-shared" ]] && needs_cgo=1
+done
+if [[ "$needs_cgo" == "1" ]]; then
+  [[ "$(go env CGO_ENABLED)" == "1" ]] || fail "CGO_ENABLED must be 1 for this driver bundle"
+fi
 
 case "$target" in
   darwin-*)
@@ -101,7 +127,7 @@ esac
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-artifact_dir="$repo_root/dist/$version/$target"
+artifact_dir="$repo_root/dist/$version/$target/drivers/$driver"
 temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/kvlite-release.XXXXXX")"
 staging_dir="$temporary_dir/artifact"
 cleanup() {
@@ -123,7 +149,7 @@ has_component() {
 }
 
 if has_component cli; then
-  go build -tags rocksdb -trimpath -buildvcs=false \
+  go build -tags "$build_tags" -trimpath -buildvcs=false \
     -o "$staging_dir/bin/$executable_name" \
     ./cmd/kvlite
   files+=("bin/$executable_name")
@@ -132,7 +158,7 @@ fi
 if has_component c-shared; then
   # Go emits a generated header beside a c-shared output. Build in a temporary
   # directory so the release ships only the reviewed, checked-in ABI header.
-  go build -tags rocksdb -trimpath -buildvcs=false -buildmode=c-shared \
+  go build -tags "$build_tags" -trimpath -buildvcs=false -buildmode=c-shared \
     -o "$temporary_dir/$library_name" \
     ./capi
   cp "$temporary_dir/$library_name" "$staging_dir/lib/$library_name"
@@ -156,4 +182,4 @@ mkdir -p "$(dirname "$artifact_dir")"
 rm -rf "$artifact_dir"
 mv "$staging_dir" "$artifact_dir"
 
-printf 'Built KVLite %s for %s in %s\n' "$version" "$target" "$artifact_dir"
+printf 'Built KVLite %s driver bundle %s for %s in %s\n' "$version" "$driver" "$target" "$artifact_dir"

@@ -13,6 +13,8 @@ const (
 type config struct {
 	codec             Codec
 	codecs            map[string]Codec
+	driver            DriverName
+	driverExplicit    bool
 	blockCacheSize    int
 	writeBufferSize   int
 	maxWriteBuffers   int
@@ -27,6 +29,7 @@ func defaultConfig() config {
 	return config{
 		codec:             codec,
 		codecs:            map[string]Codec{codec.Name(): codec},
+		driver:            DriverRocksDB,
 		blockCacheSize:    defaultBlockCacheSize,
 		writeBufferSize:   defaultWriteBufferSize,
 		maxWriteBuffers:   2,
@@ -37,6 +40,30 @@ func defaultConfig() config {
 
 // Option customizes Open while preserving KVLite's safe defaults.
 type Option func(*config) error
+
+// WithBackend is the backwards-compatible name for WithDriver.
+//
+// New applications should use WithDriver. A database directory is bound to
+// the chosen driver by KVLite metadata, so use a new path (or an explicit
+// export and import) when changing engines.
+func WithBackend(backend Backend) Option {
+	return WithDriver(string(backend))
+}
+
+// WithDriver selects the installed storage driver that owns path. The default
+// remains rocksdb for compatibility, but the core does not include RocksDB or
+// any other driver: import the driver package you intend to use first.
+func WithDriver(driver string) Option {
+	return func(cfg *config) error {
+		canonical, err := normalizeDriverName(DriverName(driver))
+		if err != nil {
+			return err
+		}
+		cfg.driver = canonical
+		cfg.driverExplicit = true
+		return nil
+	}
+}
 
 // WithCodec selects the codec used for new values. Previously registered
 // codecs remain available for decoding existing values.
@@ -63,8 +90,9 @@ func WithRegisteredCodec(codec Codec) Option {
 	}
 }
 
-// WithMemoryBudget derives a conservative RocksDB profile from one total
-// memory allowance. The budget must be at least 24 MiB.
+// WithMemoryBudget derives a conservative profile from one total memory
+// allowance. RocksDB and LevelDB both use the cache and write-buffer portions
+// of this profile. The budget must be at least 24 MiB.
 func WithMemoryBudget(bytes int) Option {
 	return func(cfg *config) error {
 		if bytes < 24<<20 {

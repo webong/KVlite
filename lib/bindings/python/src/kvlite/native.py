@@ -28,7 +28,10 @@ class LibraryFinder:
     """Find a release library without depending on a system-wide install."""
 
     @staticmethod
-    def find(requested_path: str | os.PathLike[str] | None = None) -> Path:
+    def find(
+        requested_path: str | os.PathLike[str] | None = None,
+        driver: str | None = None,
+    ) -> Path:
         candidates: list[Path] = []
         for candidate in (requested_path, os.environ.get("KVLITE_LIBRARY_PATH")):
             if candidate:
@@ -36,7 +39,12 @@ class LibraryFinder:
 
         library_name = LibraryFinder._library_name()
         if home := os.environ.get("KVLITE_HOME"):
-            candidates.append(Path(home).expanduser() / "lib" / library_name)
+            home_path = Path(home).expanduser()
+            if driver:
+                candidates.append(home_path / "drivers" / driver / "lib" / library_name)
+            if bundled := LibraryFinder._sole_driver_bundle(home_path, library_name):
+                candidates.append(bundled)
+            candidates.append(home_path / "lib" / library_name)
 
         package_root = Path(__file__).resolve().parents[2]
         target = LibraryFinder._target()
@@ -44,6 +52,8 @@ class LibraryFinder:
 
         # Convenient when using the package directly in a KVLite source checkout.
         repository_root = package_root.parents[2]
+        if driver:
+            candidates.append(repository_root / "dist" / "dev" / target / "drivers" / driver / "lib" / library_name)
         candidates.append(repository_root / "dist" / "dev" / target / "lib" / library_name)
 
         for candidate in candidates:
@@ -72,6 +82,19 @@ class LibraryFinder:
         architecture = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(machine, machine)
         return f"{system}-{architecture}"
 
+    @staticmethod
+    def _sole_driver_bundle(home: Path, library_name: str) -> Path | None:
+        """Return a sole installed driver bundle, without guessing among many."""
+        try:
+            bundles = [
+                entry / "lib" / library_name
+                for entry in (home / "drivers").iterdir()
+                if (entry / "lib" / library_name).is_file()
+            ]
+        except OSError:
+            return None
+        return bundles[0] if len(bundles) == 1 else None
+
 
 class _NativeLibrary:
     def __init__(self, path: Path) -> None:
@@ -96,6 +119,25 @@ class _NativeLibrary:
         self._open = self._library.kvlite_open
         self._open.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_void_p)]
         self._open.restype = ctypes.c_int
+
+        # Driver selection was added as an additive ABI v1 symbol. Prefer its
+        # current spelling but preserve compatible libraries that exported the
+        # original backend-named alias.
+        self._open_with_backend = None
+        for symbol in ("kvlite_open_with_driver", "kvlite_open_with_backend"):
+            try:
+                self._open_with_backend = getattr(self._library, symbol)
+                break
+            except AttributeError:
+                continue
+        if self._open_with_backend is not None:
+            self._open_with_backend.argtypes = [
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+                ctypes.POINTER(ctypes.c_uint64),
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            self._open_with_backend.restype = ctypes.c_int
 
         self._close = self._library.kvlite_close
         self._close.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_void_p)]
@@ -165,14 +207,41 @@ class NativeDatabase:
         cls,
         path: str | os.PathLike[str],
         library_path: str | os.PathLike[str] | None = None,
+        backend: str = "rocksdb",
+        *,
+        driver: str | None = None,
     ) -> "NativeDatabase":
         database_path = os.fspath(path)
         if not database_path:
             raise InvalidArgumentError("KVLite database path is required.")
-        library = _NativeLibrary(LibraryFinder.find(library_path))
+        explicit_driver = driver is not None
+        if driver is not None:
+            if not isinstance(driver, str) or not (driver := driver.strip().lower()):
+                raise InvalidArgumentError("KVLite storage driver is required.")
+            if isinstance(backend, str) and (legacy_backend := backend.strip().lower()) not in {"", "rocksdb", driver}:
+                raise InvalidArgumentError("KVLite driver and backend options select different storage drivers.")
+            backend = driver
+        if not isinstance(backend, str) or not (backend := backend.strip().lower()):
+            raise InvalidArgumentError("KVLite storage driver is required.")
+        explicit_driver = explicit_driver or backend != "rocksdb"
+        library = _NativeLibrary(LibraryFinder.find(library_path, backend))
         out_handle = ctypes.c_uint64()
         out_error = ctypes.c_void_p()
-        status = int(library._open(database_path.encode("utf-8"), ctypes.byref(out_handle), ctypes.byref(out_error)))
+        if not explicit_driver:
+            status = int(library._open(database_path.encode("utf-8"), ctypes.byref(out_handle), ctypes.byref(out_error)))
+        else:
+            if library._open_with_backend is None:
+                raise NativeLibraryError(
+                    "This KVLite native library does not support selecting a storage backend. Upgrade libkvlite."
+                )
+            status = int(
+                library._open_with_backend(
+                    database_path.encode("utf-8"),
+                    backend.encode("utf-8"),
+                    ctypes.byref(out_handle),
+                    ctypes.byref(out_error),
+                )
+            )
         library.raise_for_status(status, out_error)
         return cls(library, int(out_handle.value))
 

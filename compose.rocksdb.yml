@@ -9,4 +9,4 @@ services:
     environment:
       CGO_ENABLED: "1"
       GOTOOLCHAIN: local
-    command: ["go", "test", "-tags", "rocksdb", "./..."]
+    command: ["sh", "-c", "go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./drivers/rocksdb/... ./examples/basic"]

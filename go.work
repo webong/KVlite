@@ -1,0 +1,14 @@
+go 1.23
+
+use (
+	.
+	./capi
+	./cmd/kvlite
+	./drivers/leveldb
+	./drivers/rocksdb
+	./examples/basic
+)
+
+replace github.com/webong/kvlite v0.1.0 => .
+replace github.com/webong/kvlite/drivers/leveldb v0.1.0 => ./drivers/leveldb
+replace github.com/webong/kvlite/drivers/rocksdb v0.1.0 => ./drivers/rocksdb

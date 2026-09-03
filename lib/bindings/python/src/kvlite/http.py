@@ -25,15 +25,20 @@ class HttpDatabase:
         token: str | None = None,
         timeout_seconds: float = 30,
         requester: Requester | None = None,
+        driver: str | None = None,
     ) -> None:
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise InvalidArgumentError("KVLite remote URL must be a valid http(s) URL.")
         if timeout_seconds <= 0:
             raise InvalidArgumentError("KVLite HTTP timeout must be positive.")
+        if driver is not None:
+            if not isinstance(driver, str) or not (driver := driver.strip().lower()):
+                raise InvalidArgumentError("KVLite remote driver must be a non-empty string when provided.")
         self._base_url = base_url.rstrip("/")
         self._token = token
         self._timeout_seconds = timeout_seconds
+        self._driver = driver
         self._requester = requester
 
     def put(self, key: Key, value: Any, ttl_seconds: int = 0) -> None:
@@ -71,6 +76,8 @@ class HttpDatabase:
             headers["Content-Type"] = "application/json"
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
+        if self._driver:
+            headers["X-KVLite-Driver"] = self._driver
         url = self._base_url + path
         if self._requester is not None:
             return self._requester(method, url, body, headers)

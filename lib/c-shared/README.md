@@ -9,10 +9,15 @@ codes and allocator ownership remain documented and stable.
 Build only this artifact on the current native platform:
 
 ```bash
-make release-c-shared RELEASE_VERSION=v0.1.0
+make release-c-shared RELEASE_VERSION=v0.1.0 DRIVER=leveldb
 ```
 
 The output contains the platform library and `include/kvlite.h`. ABI version 1
 is checked by the Python, Node.js, PHP, and Rust adapters in
 [`../bindings/`](../bindings/) before any database handle is opened; none of
 them embeds a second database implementation.
+
+ABI v1 also includes additive `kvlite_open_with_driver(path, driver, ...)` and
+the compatible `kvlite_open_with_backend(path, backend, ...)` alias. Existing
+`kvlite_open(path, ...)` calls select the bundle's default driver; current
+bindings can explicitly select any driver built into that bundle.

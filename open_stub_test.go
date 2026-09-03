@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-func TestOpenRequiresRocksDBBuildTag(t *testing.T) {
+func TestOpenRequiresInstalledDefaultDriver(t *testing.T) {
 	_, err := Open(t.TempDir())
-	if !errors.Is(err, ErrRocksDBNotBuilt) {
-		t.Fatalf("Open() error = %v, want ErrRocksDBNotBuilt", err)
+	if !errors.Is(err, ErrDriverNotInstalled) {
+		t.Fatalf("Open() error = %v, want ErrDriverNotInstalled", err)
 	}
 }

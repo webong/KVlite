@@ -52,9 +52,19 @@ WORKDIR /workspace
 
 # Keep dependency downloads in an early layer so source-only changes rebuild
 # quickly while still compiling against the pinned RocksDB headers and library.
-COPY go.mod go.sum ./
-RUN go mod download
+COPY go.work go.mod go.sum ./
+COPY capi/go.mod capi/go.sum ./capi/
+COPY cmd/kvlite/go.mod cmd/kvlite/go.sum ./cmd/kvlite/
+COPY drivers/leveldb/go.mod drivers/leveldb/go.sum ./drivers/leveldb/
+COPY drivers/rocksdb/go.mod drivers/rocksdb/go.sum ./drivers/rocksdb/
+COPY examples/basic/go.mod examples/basic/go.sum ./examples/basic/
+RUN go mod download \
+    && (cd capi && go mod download) \
+    && (cd cmd/kvlite && go mod download) \
+    && (cd drivers/leveldb && go mod download) \
+    && (cd drivers/rocksdb && go mod download) \
+    && (cd examples/basic && go mod download)
 
 COPY . .
 
-CMD ["go", "test", "-tags", "rocksdb", "./..."]
+CMD ["sh", "-c", "go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./drivers/rocksdb/... ./examples/basic"]
