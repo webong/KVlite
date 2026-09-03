@@ -90,6 +90,11 @@ The standalone `kvlite serve` CLI exposes HTTP/Redis as optional extensions.
 - Add `--extension-mode standalone` to start module-discovered standalone extension
   binaries instead of linked packages.
 
+```bash
+kvlite serve --path ./data --extension-mode standalone --listen 127.0.0.1:8080
+kvlite serve --path ./data --extension-mode standalone --redis-listen 127.0.0.1:6379
+```
+
 In standalone mode, only one protocol extension may own the database directory per
 CLI instance; choose either HTTP (default) or Redis.
 
