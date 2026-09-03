@@ -129,6 +129,26 @@ func TestOpenRejectsUnavailableBerkeleyDBWithoutTouchingPath(t *testing.T) {
 	}
 }
 
+func TestOpenReportsInstalledDriverModuleWithoutLinkedAdapter(t *testing.T) {
+	root := t.TempDir()
+	manifest := testExtensionManifest("leveldb")
+	manifest.Kind = ModuleKindDriver
+	manifest.Driver = DriverLevelDB
+	writeTestModuleManifest(t, filepath.Join(root, "leveldb"), manifest)
+
+	t.Setenv("KVLITE_MODULE_PATH", root)
+	t.Setenv("KVLITE_HOME", "")
+
+	path := filepath.Join(t.TempDir(), "installed")
+	_, err := Open(path, WithDriver(string(DriverLevelDB)))
+	if !errors.Is(err, ErrDriverNotLoaded) {
+		t.Fatalf("Open() error = %v, want ErrDriverNotLoaded", err)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("Open() created unavailable backend path: stat error = %v", statErr)
+	}
+}
+
 func TestDriversReportOnlyInstalledDrivers(t *testing.T) {
 	info, err := DriverInfoFor(testMemoryDriverName)
 	if err != nil {

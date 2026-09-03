@@ -1,6 +1,7 @@
 package kvlite
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -248,8 +249,33 @@ func (cfg config) driverOptions() DriverOptions {
 	}
 }
 
+func resolveLinkedDriverOrReportModule(name DriverName, driverExplicit bool) (DriverName, registeredDriver, error) {
+	registeredName, registered, err := registeredDriverFor(name)
+	if err == nil {
+		return registeredName, registered, nil
+	}
+	if !errors.Is(err, ErrDriverNotInstalled) {
+		return "", registeredDriver{}, err
+	}
+	if !driverExplicit {
+		return "", registeredDriver{}, err
+	}
+
+	module, moduleErr := ResolveModule(name)
+	if moduleErr != nil {
+		return "", registeredDriver{}, err
+	}
+	if module.Manifest.Kind != ModuleKindDriver {
+		return "", registeredDriver{}, fmt.Errorf("%w: installed module %q is not a driver module", ErrDriverNotLoaded, name)
+	}
+	if _, _, err := module.ArtifactForCurrentPlatform(ModuleArtifactCShared, ModuleArtifactExecutable); err != nil {
+		return "", registeredDriver{}, fmt.Errorf("%w: installed driver %q is available, but this binary did not load its adapter: %v", ErrDriverNotLoaded, name, err)
+	}
+	return "", registeredDriver{}, fmt.Errorf("%w: installed driver %q has a runtime module at %s that is not linked into this process", ErrDriverNotLoaded, name, module.Manifest.Name)
+}
+
 func openConfiguredEngine(path string, cfg config) (Engine, Backend, error) {
-	name, registered, err := registeredDriverFor(cfg.driver)
+	name, registered, err := resolveLinkedDriverOrReportModule(cfg.driver, cfg.driverExplicit)
 	if err != nil {
 		return nil, "", err
 	}

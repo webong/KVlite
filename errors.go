@@ -22,6 +22,10 @@ var (
 	// ErrDriverNotInstalled lets applications distinguish an unsupported name
 	// from a known target whose optional driver was not packaged in this build.
 	ErrDriverNotInstalled = errors.New("kvlite: storage driver is not installed")
+	// ErrDriverNotLoaded means a driver module is installed and discoverable at
+	// runtime, but this process has not linked (or otherwise loaded) an
+	// adapter for it.
+	ErrDriverNotLoaded = errors.New("kvlite: storage driver is installed but not loaded")
 	// ErrModuleNotInstalled means no linked or discovered KVLite module has the
 	// requested stable module name. It is intentionally separate from
 	// ErrDriverNotInstalled because HTTP, Redis, codecs, and other optional

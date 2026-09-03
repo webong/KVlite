@@ -72,6 +72,11 @@ driver name and the server resolves only an installed, server-owned mapping.
 A missing driver returns `driver_not_installed`; an installed but unexposed one
 returns `driver_not_exposed`. Remote clients never choose a filesystem path.
 
+For in-process calls, local `WithDriver` resolution now also checks installed
+driver modules. If a discoverable module matches the requested name, KVLite
+returns a dedicated error that tells you the module is present but not linked into
+the current process.
+
 When KVLite adds named remote database creation, that same request will select
 the initial driver and persist it in the database manifest. Later requests for
 a different driver will fail rather than guessing or converting storage files.

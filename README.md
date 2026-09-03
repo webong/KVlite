@@ -214,7 +214,9 @@ configuration-driven applications.
 linked unless `extensions/rocksdb` is imported. `leveldb` is a pure-Go optional
 extension. `berkeleydb` is an opt-in native extension: without its explicit
 import and `berkeleydb` build tag it returns `ErrDriverNotInstalled`; with the
-import but without native support it returns `ErrBerkeleyDBNotBuilt`.
+import but without native support it returns `ErrBerkeleyDBNotBuilt`. If a matching
+driver module is discoverable by `KVLITE_MODULE_PATH`/`KVLITE_HOME` but this process
+does not link that driver, `Open(..., WithDriver(...))` now returns `ErrDriverNotLoaded`.
 
 On first open, KVLite writes `KVLITE-MANIFEST.json` beside the database files
 with the selected driver, implementation identity, and KVLite format version.
