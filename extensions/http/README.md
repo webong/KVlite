@@ -4,13 +4,19 @@
 for KVLite's language-neutral JSON/HTTP protocol. The root `kvlite` module's
 ordinary `Open` path is embedded-only and never opens a network listener.
 
+This is the linked Go implementation. Its `kvlite-module.json` uses the same
+catalog contract as drivers, so a future standalone HTTP executable can be
+installed and discovered without compiling a host application. It will attach
+to the single KVLite database owner over private local IPC; it will not open a
+second copy of a RocksDB directory. See [the module contract](../../MODULES.md).
+
 ```go
 import (
     "context"
 
     "github.com/webong/kvlite"
     kvlitehttp "github.com/webong/kvlite/extensions/http"
-    _ "github.com/webong/kvlite/drivers/leveldb"
+    _ "github.com/webong/kvlite/extensions/leveldb"
 )
 
 db, err := kvlite.Open("./data", kvlite.WithDriver("leveldb"))

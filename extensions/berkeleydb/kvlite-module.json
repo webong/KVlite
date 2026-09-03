@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "name": "berkeleydb",
+  "kind": "driver",
+  "version": "unreleased",
+  "module_abi": 1,
+  "driver": "berkeleydb",
+  "capabilities": ["embedded-storage"],
+  "license": "LicenseRef-BerkeleyDB-separate-distribution"
+}

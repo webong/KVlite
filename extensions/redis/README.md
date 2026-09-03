@@ -4,6 +4,12 @@
 RESP server for KVLite. The root `kvlite` module remains embedded-only: an
 ordinary `Open` never imports or starts a network listener.
 
+This is the linked Go implementation. Its `kvlite-module.json` uses the same
+catalog contract as drivers, so a future standalone Redis executable can be
+installed and discovered without compiling a host application. It will attach
+to the single KVLite database owner over private local IPC; it will not open a
+second copy of a RocksDB directory. See [the module contract](../../MODULES.md).
+
 ```bash
 go get github.com/webong/kvlite/extensions/redis
 ```
@@ -14,7 +20,7 @@ import (
 
     "github.com/webong/kvlite"
     kvliteredis "github.com/webong/kvlite/extensions/redis"
-    _ "github.com/webong/kvlite/drivers/leveldb"
+    _ "github.com/webong/kvlite/extensions/leveldb"
 )
 
 db, err := kvlite.Open("./data", kvlite.WithDriver("leveldb"))

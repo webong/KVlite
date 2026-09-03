@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "name": "http",
+  "kind": "extension",
+  "version": "v0.1.0",
+  "module_abi": 1,
+  "capabilities": ["http-client", "http-server", "remote-driver-selection"],
+  "license": "Apache-2.0"
+}

@@ -26,6 +26,8 @@ func run(args []string) int {
 	switch args[0] {
 	case "driver":
 		return runDriver(args[1:])
+	case "module":
+		return runModule(args[1:])
 	case "serve":
 	default:
 		fmt.Fprintf(os.Stderr, "kvlite: unknown command %q\n", args[0])
@@ -158,9 +160,95 @@ func runDriver(args []string) int {
 	return 0
 }
 
+func runModule(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: kvlite module list|verify [NAME]")
+		return 2
+	}
+	switch args[0] {
+	case "list":
+		if len(args) != 1 {
+			fmt.Fprintln(os.Stderr, "Usage: kvlite module list")
+			return 2
+		}
+		return runModuleList()
+	case "verify":
+		if len(args) > 2 {
+			fmt.Fprintln(os.Stderr, "Usage: kvlite module verify [NAME]")
+			return 2
+		}
+		name := ""
+		if len(args) == 2 {
+			name = args[1]
+		}
+		return runModuleVerify(name)
+	default:
+		fmt.Fprintf(os.Stderr, "kvlite: unknown module command %q\n", args[0])
+		return 2
+	}
+}
+
+func runModuleList() int {
+	// Linked modules describe the code compiled into this binary. Installed
+	// descriptors are deliberately listed separately: discovering a module must
+	// never execute a library merely because it exists on disk.
+	for _, module := range kvlite.LinkedModules() {
+		printModule(module, "linked")
+	}
+	installed, err := kvlite.DiscoverModules()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
+		return 1
+	}
+	for _, module := range installed {
+		printModule(module, "installed")
+	}
+	return 0
+}
+
+func runModuleVerify(name string) int {
+	var (
+		modules []kvlite.Module
+		err     error
+	)
+	if name != "" {
+		module, findErr := kvlite.FindInstalledModule(name)
+		if findErr != nil {
+			fmt.Fprintf(os.Stderr, "kvlite: %v\n", findErr)
+			return 1
+		}
+		modules = []kvlite.Module{module}
+	} else {
+		modules, err = kvlite.DiscoverModules()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
+			return 1
+		}
+	}
+	for _, module := range modules {
+		if err := module.Verify(); err != nil {
+			fmt.Fprintf(os.Stderr, "kvlite: module %s: %v\n", module.Manifest.Name, err)
+			return 1
+		}
+		fmt.Printf("%s\tverified\n", module.Manifest.Name)
+	}
+	return 0
+}
+
+func printModule(module kvlite.Module, source string) {
+	manifest := module.Manifest
+	if module.Directory == "" {
+		fmt.Printf("%s\tkind=%s\tversion=%s\tsource=%s\n", manifest.Name, manifest.Kind, manifest.Version, source)
+		return
+	}
+	fmt.Printf("%s\tkind=%s\tversion=%s\tsource=%s\tpath=%s\n", manifest.Name, manifest.Kind, manifest.Version, source, module.Directory)
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, "Usage: kvlite serve --path DIR [--driver NAME] [--driver-path NAME=DIR] [--listen HOST:PORT] [--token TOKEN] [--redis-listen HOST:PORT] [--redis-password PASSWORD]")
 	fmt.Fprintln(os.Stderr, "       kvlite driver list")
+	fmt.Fprintln(os.Stderr, "       kvlite module list|verify [NAME]")
 	fmt.Fprintln(os.Stderr, "\nThe binary links KVLite's optional HTTP and Redis extensions and owns server-defined driver/path mappings.")
+	fmt.Fprintln(os.Stderr, "Installed module descriptors are discovered only from KVLITE_MODULE_PATH or KVLITE_HOME/{modules,drivers}; listing them never loads code.")
 	fmt.Fprintln(os.Stderr, "Build a driver bundle with -tags kvlite_rocksdb,rocksdb or -tags kvlite_leveldb, then inspect it with `kvlite driver list`.")
 }

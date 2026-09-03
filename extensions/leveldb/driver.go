@@ -1,8 +1,8 @@
-// Package leveldb registers KVLite's optional pure-Go LevelDB driver.
+// Package leveldb registers KVLite's optional pure-Go LevelDB driver extension.
 //
 // Import it for its side effect before opening a LevelDB-backed database:
 //
-//	import _ "github.com/webong/kvlite/drivers/leveldb"
+//	import _ "github.com/webong/kvlite/extensions/leveldb"
 package leveldb
 
 import (
@@ -23,7 +23,25 @@ const Name kvlite.DriverName = kvlite.DriverLevelDB
 type driver struct{}
 
 func init() {
+	kvlite.MustRegisterLinkedModule(Manifest())
 	kvlite.MustRegisterDriver(driver{})
+}
+
+// Manifest describes this linked Go driver using the same metadata shape as a
+// standalone KVLite module bundle. Release artifacts supply checksummed native
+// entries through kvlite-module.json; this source module remains the explicit
+// Go-import development path.
+func Manifest() kvlite.ModuleManifest {
+	return kvlite.ModuleManifest{
+		SchemaVersion: kvlite.ModuleManifestVersion,
+		Name:          string(Name),
+		Kind:          kvlite.ModuleKindDriver,
+		Version:       "v0.1.0",
+		ModuleABI:     kvlite.ModuleABIVersion,
+		Driver:        Name,
+		Capabilities:  []string{"embedded-storage"},
+		License:       "Apache-2.0",
+	}
 }
 
 func (driver) Info() kvlite.DriverInfo {

@@ -1,4 +1,4 @@
-module github.com/webong/kvlite/drivers/rocksdb
+module github.com/webong/kvlite/extensions/rocksdb
 
 go 1.23
 

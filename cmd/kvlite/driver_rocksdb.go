@@ -2,4 +2,4 @@
 
 package main
 
-import _ "github.com/webong/kvlite/drivers/rocksdb"
+import _ "github.com/webong/kvlite/extensions/rocksdb"

@@ -22,6 +22,25 @@ var (
 	// ErrDriverNotInstalled lets applications distinguish an unsupported name
 	// from a known target whose optional driver was not packaged in this build.
 	ErrDriverNotInstalled = errors.New("kvlite: storage driver is not installed")
+	// ErrModuleNotInstalled means no linked or discovered KVLite module has the
+	// requested stable module name. It is intentionally separate from
+	// ErrDriverNotInstalled because HTTP, Redis, codecs, and other optional
+	// capabilities are modules too.
+	ErrModuleNotInstalled = errors.New("kvlite: module is not installed")
+	// ErrModuleManifestInvalid means a discovered module descriptor is malformed
+	// or unsafe to load. KVLite never guesses from an arbitrary library name.
+	ErrModuleManifestInvalid = errors.New("kvlite: module manifest is invalid")
+	// ErrModuleIncompatible means a module was built for a different KVLite
+	// module manifest ABI.
+	ErrModuleIncompatible = errors.New("kvlite: module is incompatible")
+	// ErrModuleConflict prevents two installed artifacts from silently claiming
+	// the same stable KVLite module name.
+	ErrModuleConflict = errors.New("kvlite: module name conflict")
+	// ErrModuleArtifactMissing means a manifest refers to an artifact which is
+	// absent for this installed module.
+	ErrModuleArtifactMissing = errors.New("kvlite: module artifact is missing")
+	// ErrModuleIntegrity means an artifact does not match its manifest checksum.
+	ErrModuleIntegrity = errors.New("kvlite: module artifact integrity check failed")
 	// ErrDriverNotExposed means a remote server has the driver installed but
 	// has not mapped any server-owned database path for it.
 	ErrDriverNotExposed = errors.New("kvlite: storage driver is not exposed by this server")

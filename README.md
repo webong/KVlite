@@ -11,10 +11,16 @@ languages use an optional server extension or a driver-specific C bundle.
 This repository is an MVP: the storage format is versioned and tested, while
 the public API is still free to evolve before a first stable release.
 
+See [MODULES.md](MODULES.md) for the standalone module catalog used by native
+bundles and optional transports. The normal Go blank-import path below remains
+the in-process development workflow; applications and language bindings should
+ultimately install prebuilt module artifacts rather than compile KVLite.
+
 ## What is included
 
-- A driver registry: import only `drivers/rocksdb`, `drivers/leveldb`, or a
-  future independently licensed Berkeley DB driver, then use `WithDriver`.
+- An extension registry: import only `extensions/rocksdb`,
+  `extensions/leveldb`, or a future independently licensed Berkeley DB driver,
+  then use `WithDriver`.
 - Automatic JSON encoding for strings, numbers, structs, slices, and maps.
 - A pluggable `Codec` interface with the codec name stored beside every value.
 - Per-key and per-hash-field TTLs with exact read-time expiry.
@@ -40,16 +46,26 @@ The core module imports no storage engine. Pick one driver explicitly:
 ```go
 import (
 	"github.com/webong/kvlite"
-	_ "github.com/webong/kvlite/drivers/rocksdb"
+	_ "github.com/webong/kvlite/extensions/rocksdb"
 )
 
 db, err := kvlite.Open("./app-data", kvlite.WithDriver("rocksdb"))
 ```
 
-`drivers/leveldb` is pure Go. `drivers/rocksdb` needs the `rocksdb` build tag
-and the native library. A future `drivers/berkeleydb` remains entirely outside
-the core module and its license obligations apply only to users who install it.
-See [`drivers/`](drivers/) for the module and release-tag contract.
+`extensions/leveldb` is pure Go. `extensions/rocksdb` needs the `rocksdb`
+build tag and the native library. A future `extensions/berkeleydb` remains
+entirely outside the core module and its license obligations apply only to users
+who install it. See [`extensions/`](extensions/) for the unified module layout;
+there are no alternate Go driver import paths.
+
+Released driver bundles include a checksummed `kvlite-module.json`. Set
+`KVLITE_MODULE_PATH` or `KVLITE_HOME` and inspect artifacts without loading
+them:
+
+```bash
+kvlite module list
+kvlite module verify rocksdb
+```
 
 ### Embedded is the default
 
@@ -70,6 +86,11 @@ The standalone `kvlite serve` CLI links both extensions for you. Each remains
 an explicit opt-in: neither protocol starts as part of an ordinary embedded
 `Open`.
 
+The current CLI is a convenience linked bundle. HTTP and Redis now expose the
+same module metadata as storage drivers; their independently installed
+executable form will attach to the one database-owning KVLite runtime through
+private local IPC. See [MODULES.md](MODULES.md#http-and-redis).
+
 ### RocksDB driver
 
 KVLite uses [`github.com/linxGnu/grocksdb`](https://github.com/linxGnu/grocksdb),
@@ -87,14 +108,14 @@ brew install rocksdb
 ROCKS_PREFIX="$(brew --prefix rocksdb)"
 CGO_CFLAGS="-I${ROCKS_PREFIX}/include" \
 CGO_LDFLAGS="-L${ROCKS_PREFIX}/lib" \
-go test -tags rocksdb ./drivers/rocksdb/...
+go test -tags rocksdb ./extensions/rocksdb/...
 ```
 
 On Linux, install the RocksDB development package supplied by the distribution,
 then run:
 
 ```bash
-go test -tags rocksdb ./drivers/rocksdb/...
+go test -tags rocksdb ./extensions/rocksdb/...
 ```
 
 The `rocksdb` build tag is deliberate: consumers can run core, codec, and the
@@ -138,7 +159,7 @@ import (
 	"time"
 
 	"github.com/webong/kvlite"
-	_ "github.com/webong/kvlite/drivers/rocksdb"
+	_ "github.com/webong/kvlite/extensions/rocksdb"
 )
 
 type User struct {
@@ -180,7 +201,7 @@ Choose the underlying engine when the local owner opens the directory. The
 blank import is what installs the Go driver into this process:
 
 ```go
-import _ "github.com/webong/kvlite/drivers/leveldb"
+import _ "github.com/webong/kvlite/extensions/leveldb"
 
 db, err := kvlite.Open("./kvlite-level-data", kvlite.WithDriver("leveldb"))
 ```
@@ -189,8 +210,8 @@ db, err := kvlite.Open("./kvlite-level-data", kvlite.WithDriver("leveldb"))
 configuration-driven applications.
 
 `rocksdb` remains the compatibility default for `Open(path)`, but it is not
-linked unless `drivers/rocksdb` is imported. `leveldb` is a pure-Go optional
-module. `berkeleydb` is a reserved target name and returns
+linked unless `extensions/rocksdb` is imported. `leveldb` is a pure-Go optional
+extension. `berkeleydb` is a reserved target name and returns
 `ErrDriverNotInstalled` until a separately distributed, license-reviewed
 driver is released.
 
@@ -237,6 +258,7 @@ Inspect the compiled bundle before serving it:
 
 ```bash
 ./kvlite driver list
+./kvlite module list
 ```
 
 Write and read from any shell:
@@ -300,7 +322,7 @@ import (
 
     "github.com/webong/kvlite"
     kvliteredis "github.com/webong/kvlite/extensions/redis"
-    _ "github.com/webong/kvlite/drivers/rocksdb"
+    _ "github.com/webong/kvlite/extensions/rocksdb"
 )
 
 db, err := kvlite.Open("./kvlite-data", kvlite.WithDriver("rocksdb"))
@@ -415,6 +437,10 @@ runners. `windows-amd64` is already part of the release contract and can be
 built by the same script on a Windows runner once its RocksDB toolchain is
 pinned in CI.
 
+`drivers/<driver>` is retained as the initial release-layout path for language
+binding compatibility. It does not reflect the source layout: all optional Go
+modules—including RocksDB and LevelDB—live under [`extensions/`](extensions/).
+
 The initial build produces native artifact candidates rather than a
 self-contained installer: RocksDB and its compression-library runtime files
 are not bundled yet. The release packaging phase must bundle those files,
@@ -426,7 +452,7 @@ binary downloads are suitable for clean machines.
 The HTTP and Redis servers live in their respective extension modules, not the
 core module. A server owns each selected driver/path pair and remains the only
 process allowed to open those database directories. In an application, add
-blank imports for `drivers/rocksdb` and `drivers/leveldb` before using this
+blank imports for the selected storage extensions before using this
 configuration:
 
 ```go
@@ -436,8 +462,8 @@ import (
 
 	"github.com/webong/kvlite"
 	kvlitehttp "github.com/webong/kvlite/extensions/http"
-	_ "github.com/webong/kvlite/drivers/leveldb"
-	_ "github.com/webong/kvlite/drivers/rocksdb"
+	_ "github.com/webong/kvlite/extensions/leveldb"
+	_ "github.com/webong/kvlite/extensions/rocksdb"
 )
 
 owner, err := kvlite.Open("./rocks-data", kvlite.WithDriver("rocksdb"))

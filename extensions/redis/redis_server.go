@@ -18,6 +18,25 @@ import (
 	"github.com/webong/kvlite"
 )
 
+func init() {
+	kvlite.MustRegisterLinkedModule(Manifest())
+}
+
+// Manifest describes the optional Redis-compatible transport. It is linked
+// only by callers that import this package and starts a listener only through
+// its explicit Serve API.
+func Manifest() kvlite.ModuleManifest {
+	return kvlite.ModuleManifest{
+		SchemaVersion: kvlite.ModuleManifestVersion,
+		Name:          "redis",
+		Kind:          kvlite.ModuleKindExtension,
+		Version:       "v0.1.0",
+		ModuleABI:     kvlite.ModuleABIVersion,
+		Capabilities:  []string{"redis-resp2", "redis-server"},
+		License:       "Apache-2.0",
+	}
+}
+
 // Options configures the optional Redis protocol endpoint. The endpoint
 // speaks RESP2 and runs in the same process as the owning DB handle.
 //

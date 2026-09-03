@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "name": "rocksdb",
+  "kind": "driver",
+  "version": "v0.1.0",
+  "module_abi": 1,
+  "driver": "rocksdb",
+  "capabilities": ["embedded-storage", "ttl-compaction"],
+  "license": "Apache-2.0"
+}

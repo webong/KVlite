@@ -4,8 +4,8 @@ go 1.23
 
 require (
 	github.com/webong/kvlite v0.1.0
-	github.com/webong/kvlite/drivers/leveldb v0.1.0
-	github.com/webong/kvlite/drivers/rocksdb v0.1.0
+	github.com/webong/kvlite/extensions/leveldb v0.1.0
+	github.com/webong/kvlite/extensions/rocksdb v0.1.0
 )
 
 require (
@@ -16,6 +16,6 @@ require (
 
 replace github.com/webong/kvlite => ..
 
-replace github.com/webong/kvlite/drivers/leveldb => ../drivers/leveldb
+replace github.com/webong/kvlite/extensions/leveldb => ../extensions/leveldb
 
-replace github.com/webong/kvlite/drivers/rocksdb => ../drivers/rocksdb
+replace github.com/webong/kvlite/extensions/rocksdb => ../extensions/rocksdb

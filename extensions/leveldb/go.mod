@@ -1,4 +1,4 @@
-module github.com/webong/kvlite/drivers/leveldb
+module github.com/webong/kvlite/extensions/leveldb
 
 go 1.23
 

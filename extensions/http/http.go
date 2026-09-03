@@ -27,6 +27,25 @@ const defaultMaxRequestBytes int64 = 64 << 20
 
 const driverHeader = "X-KVLite-Driver"
 
+func init() {
+	kvlite.MustRegisterLinkedModule(Manifest())
+}
+
+// Manifest describes the optional HTTP transport. An ordinary import of the
+// core never registers this module or opens a network listener; importing this
+// package only makes its explicit Serve API available.
+func Manifest() kvlite.ModuleManifest {
+	return kvlite.ModuleManifest{
+		SchemaVersion: kvlite.ModuleManifestVersion,
+		Name:          "http",
+		Kind:          kvlite.ModuleKindExtension,
+		Version:       "v0.1.0",
+		ModuleABI:     kvlite.ModuleABIVersion,
+		Capabilities:  []string{"http-client", "http-server", "remote-driver-selection"},
+		License:       "Apache-2.0",
+	}
+}
+
 // Options configures the optional local HTTP transport. DriverPaths exposes
 // additional server-owned directories under their selected drivers. RedisURL
 // advertises an independently started Redis extension for the primary

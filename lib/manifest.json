@@ -2,17 +2,24 @@
   "format": 1,
   "name": "kvlite",
   "cAbiVersion": 1,
+  "moduleAbiVersion": 1,
+  "moduleManifest": "kvlite-module.json",
+  "moduleSearchPaths": ["KVLITE_MODULE_PATH", "KVLITE_HOME/modules", "KVLITE_HOME/drivers"],
   "driverBundles": [
     {
       "id": "rocksdb",
-      "goModule": "github.com/webong/kvlite/drivers/rocksdb",
+      "goModule": "github.com/webong/kvlite/extensions/rocksdb",
+      "sourceManifest": "../extensions/rocksdb/kvlite-module.json",
+      "manifest": "kvlite-module.json",
       "buildTags": ["rocksdb", "kvlite_rocksdb"],
       "native": true,
       "description": "RocksDB driver bundle; requires the packaged RocksDB runtime and notices."
     },
     {
       "id": "leveldb",
-      "goModule": "github.com/webong/kvlite/drivers/leveldb",
+      "goModule": "github.com/webong/kvlite/extensions/leveldb",
+      "sourceManifest": "../extensions/leveldb/kvlite-module.json",
+      "manifest": "kvlite-module.json",
       "buildTags": ["kvlite_leveldb"],
       "native": false,
       "description": "Pure-Go LevelDB driver bundle."
@@ -22,12 +29,14 @@
     {
       "id": "http",
       "goModule": "github.com/webong/kvlite/extensions/http",
-      "description": "Optional JSON/HTTP server and Go remote-client extension. The CLI links it; embedded C bundles do not."
+      "sourceManifest": "../extensions/http/kvlite-module.json",
+      "description": "Optional JSON/HTTP server and Go remote-client extension. It is linked only by callers that choose it; embedded C bundles do not include it."
     },
     {
       "id": "redis",
       "goModule": "github.com/webong/kvlite/extensions/redis",
-      "description": "Optional Redis-compatible RESP server extension. The CLI links it; embedded C bundles do not."
+      "sourceManifest": "../extensions/redis/kvlite-module.json",
+      "description": "Optional Redis-compatible RESP server extension. It is linked only by callers that choose it; embedded C bundles do not include it."
     }
   ],
   "artifacts": [
@@ -36,7 +45,7 @@
       "source": "cmd/kvlite",
       "kind": "executable",
       "releasePath": "bin/kvlite",
-      "description": "Owns selected KVLite driver directories and links the optional HTTP and Redis server extensions."
+      "description": "Owns selected KVLite driver directories. Current convenience builds link the optional HTTP and Redis server extensions; standalone protocol artifacts are the next module-loader milestone."
     },
     {
       "id": "c-shared",

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
 # Build one driver-specific CLI and/or C shared library bundle into a
-# reproducible release layout. RocksDB is linked through cgo, therefore its
-# bundle must be built natively with matching headers, library, compiler, and
-# linker available.
+# reproducible release layout. Every bundle receives a checked module manifest
+# so language bindings and future hosts can discover it without compiling Go.
+# RocksDB is linked through cgo, therefore its bundle must be built natively
+# with matching headers, library, compiler, and linker available.
 
 set -euo pipefail
 
@@ -175,6 +176,60 @@ fi
   fi
 ) > "$staging_dir/SHA256SUMS"
 
+hash_for() {
+  local artifact_path="$1"
+  awk -v artifact_path="$artifact_path" '$2 == artifact_path { print $1; exit }' "$staging_dir/SHA256SUMS"
+}
+
+write_module_manifest() {
+  local artifact_hash
+  local needs_separator=0
+  {
+    printf '{\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "name": "%s",\n' "$driver"
+    printf '  "kind": "driver",\n'
+    printf '  "version": "%s",\n' "$version"
+    printf '  "module_abi": 1,\n'
+    printf '  "driver": "%s",\n' "$driver"
+    if [[ "$driver" == "rocksdb" ]]; then
+      printf '  "capabilities": ["embedded-storage", "ttl-compaction"],\n'
+    else
+      printf '  "capabilities": ["embedded-storage"],\n'
+    fi
+    printf '  "license": "Apache-2.0",\n'
+    printf '  "artifacts": [\n'
+    if has_component cli; then
+      artifact_hash="$(hash_for "bin/$executable_name")"
+      [[ -n "$artifact_hash" ]] || fail "could not find CLI checksum"
+      printf '    {"platform": "%s", "kind": "executable", "path": "bin/%s", "sha256": "%s"}' \
+        "$target" "$executable_name" "$artifact_hash"
+      needs_separator=1
+    fi
+    if has_component c-shared; then
+      artifact_hash="$(hash_for "lib/$library_name")"
+      [[ -n "$artifact_hash" ]] || fail "could not find C shared-library checksum"
+      if [[ "$needs_separator" == "1" ]]; then
+        printf ',\n'
+      fi
+      printf '    {"platform": "%s", "kind": "c-shared", "path": "lib/%s", "sha256": "%s", "symbol": "kvlite_abi_version"}' \
+        "$target" "$library_name" "$artifact_hash"
+    fi
+    printf '\n  ]\n'
+    printf '}\n'
+  } > "$staging_dir/kvlite-module.json"
+}
+
+write_module_manifest
+(
+  cd "$staging_dir"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum kvlite-module.json
+  else
+    shasum -a 256 kvlite-module.json
+  fi
+) >> "$staging_dir/SHA256SUMS"
+
 # Only replace a version/target directory after every requested artifact was
 # built and checksummed. This keeps failed native builds out of dist/.
 [[ "$artifact_dir" == "$repo_root/dist/"* ]] || fail "refusing to replace an unsafe artifact directory"
@@ -182,4 +237,4 @@ mkdir -p "$(dirname "$artifact_dir")"
 rm -rf "$artifact_dir"
 mv "$staging_dir" "$artifact_dir"
 
-printf 'Built KVLite %s driver bundle %s for %s in %s\n' "$version" "$driver" "$target" "$artifact_dir"
+printf 'Built KVLite %s driver module %s for %s in %s\n' "$version" "$driver" "$target" "$artifact_dir"

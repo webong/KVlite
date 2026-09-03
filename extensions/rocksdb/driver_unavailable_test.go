@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/webong/kvlite"
-	_ "github.com/webong/kvlite/drivers/rocksdb"
+	_ "github.com/webong/kvlite/extensions/rocksdb"
 )
 
 func TestRocksDBDriverReportsMissingNativeBuild(t *testing.T) {

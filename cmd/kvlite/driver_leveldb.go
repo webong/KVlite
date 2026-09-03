@@ -2,4 +2,4 @@
 
 package main
 
-import _ "github.com/webong/kvlite/drivers/leveldb"
+import _ "github.com/webong/kvlite/extensions/leveldb"

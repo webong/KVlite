@@ -23,9 +23,11 @@ type DB struct {
 	closed       bool
 }
 
-// Open opens or creates a KVLite database using an installed storage driver.
-// Import a driver package (for example drivers/rocksdb or drivers/leveldb)
-// and select it with WithDriver. RocksDB remains the compatibility default.
+// Open opens or creates a KVLite database using a driver linked into this
+// process. Import a driver extension package (for example extensions/rocksdb
+// or extensions/leveldb) and select it with WithDriver. Prebuilt artifact discovery
+// is exposed separately through the module catalog while the native dynamic
+// driver loader is introduced. RocksDB remains the compatibility default.
 func Open(path string, options ...Option) (*DB, error) {
 	if path == "" {
 		return nil, fmt.Errorf("%w: database path is required", ErrInvalidArgument)

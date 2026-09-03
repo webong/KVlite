@@ -7,13 +7,13 @@ DRIVER ?= rocksdb
 DRIVER_TAGS ?= $(if $(filter rocksdb,$(DRIVER)),rocksdb kvlite_rocksdb,kvlite_leveldb)
 
 test:
-	go test . ./capi ./cmd/kvlite ./drivers/leveldb/... ./drivers/rocksdb/... ./extensions/http/... ./extensions/redis/...
+	go test . ./capi ./cmd/kvlite ./extensions/leveldb/... ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/...
 
 test-race:
-	go test -race . ./capi ./cmd/kvlite ./drivers/leveldb/... ./drivers/rocksdb/... ./extensions/http/... ./extensions/redis/...
+	go test -race . ./capi ./cmd/kvlite ./extensions/leveldb/... ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/...
 
 test-rocksdb:
-	go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./drivers/rocksdb/... ./extensions/http/... ./extensions/redis/... ./examples/basic
+	go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/... ./examples/basic
 
 test-rocksdb-docker:
 	ROCKSDB_VERSION="$(ROCKSDB_VERSION)" bash ./scripts/test-rocksdb-docker.sh
@@ -35,7 +35,7 @@ test-bindings-leveldb:
 	bash ./scripts/test-bindings-leveldb.sh
 
 vet:
-	go vet . ./capi ./cmd/kvlite ./drivers/leveldb/... ./drivers/rocksdb/... ./extensions/http/... ./extensions/redis/...
+	go vet . ./capi ./cmd/kvlite ./extensions/leveldb/... ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/...
 
 build-cli:
 	mkdir -p dist

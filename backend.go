@@ -17,9 +17,9 @@ type DriverName string
 type Backend = DriverName
 
 const (
-	// DriverRocksDB is the stable name provided by drivers/rocksdb.
+	// DriverRocksDB is the stable name provided by extensions/rocksdb.
 	DriverRocksDB DriverName = "rocksdb"
-	// DriverLevelDB is the stable name provided by drivers/leveldb.
+	// DriverLevelDB is the stable name provided by extensions/leveldb.
 	DriverLevelDB DriverName = "leveldb"
 	// DriverBerkeleyDB is reserved for a separately distributed Berkeley DB
 	// driver. The core intentionally does not register or link it.
@@ -68,10 +68,13 @@ type DriverInfo struct {
 // DriverInfo and will remain so through KVLite v1.
 type BackendInfo = DriverInfo
 
-// Driver is implemented by independently installed storage modules. A module
-// registers its Driver from init, so Go users opt in with a normal blank import:
+// Driver is the in-process Go adapter implemented by a linked storage module.
+// Independently distributed module artifacts are described by
+// kvlite-module.json and resolved through the module catalog; a host can then
+// choose an appropriate loading strategy. For the normal Go development path,
+// a linked module registers its Driver from init:
 //
-//	import _ "github.com/webong/kvlite/drivers/rocksdb"
+//	import _ "github.com/webong/kvlite/extensions/rocksdb"
 //
 // A driver is not selected merely because it is installed; callers still use
 // WithDriver when they open a database.
@@ -130,9 +133,10 @@ func MustRegisterDriver(driver Driver) {
 	}
 }
 
-// Drivers returns the drivers installed in this process. Drivers that were
-// imported but cannot run in the current native build are still listed with
-// Available false and an actionable Open error.
+// Drivers returns drivers linked into this process. Use DiscoverModules to
+// inspect separately installed artifact manifests. Drivers that were imported
+// but cannot run in the current native build are still listed with Available
+// false and an actionable Open error.
 func Drivers() []DriverInfo {
 	driverRegistry.RLock()
 	names := make([]DriverName, 0, len(driverRegistry.drivers))
@@ -155,7 +159,7 @@ func Drivers() []DriverInfo {
 	return result
 }
 
-// DriverInfoFor returns metadata for one installed driver.
+// DriverInfoFor returns metadata for one driver linked into this process.
 func DriverInfoFor(name DriverName) (DriverInfo, error) {
 	_, registered, err := registeredDriverFor(name)
 	if err != nil {

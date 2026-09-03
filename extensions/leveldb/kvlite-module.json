@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "name": "leveldb",
+  "kind": "driver",
+  "version": "v0.1.0",
+  "module_abi": 1,
+  "driver": "leveldb",
+  "capabilities": ["embedded-storage"],
+  "license": "Apache-2.0"
+}

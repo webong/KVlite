@@ -1,6 +1,4 @@
-//go:build rocksdb
-
-package rocksdb_test
+package leveldb_test
 
 import (
 	"context"
@@ -10,18 +8,15 @@ import (
 	"testing"
 
 	"github.com/webong/kvlite"
-	_ "github.com/webong/kvlite/drivers/rocksdb"
+	_ "github.com/webong/kvlite/extensions/leveldb"
 )
 
-// TestRocksDBDriverOpensAndPersistsKVLiteRecords exercises the actual cgo
-// adapter rather than merely compiling it. It is the native smoke test used
-// by both the host-tagged and Docker RocksDB suites.
-func TestRocksDBDriverOpensAndPersistsKVLiteRecords(t *testing.T) {
-	if got := kvlite.DefaultDriver(); got != kvlite.DriverRocksDB {
-		t.Fatalf("DefaultDriver() = %q, want %q", got, kvlite.DriverRocksDB)
+func TestLevelDBDriverOpensAndPersistsKVLiteRecords(t *testing.T) {
+	if got := kvlite.DefaultDriver(); got != kvlite.DriverLevelDB {
+		t.Fatalf("DefaultDriver() = %q, want %q", got, kvlite.DriverLevelDB)
 	}
 	path := t.TempDir()
-	database, err := kvlite.Open(path, kvlite.WithDriver("rocksdb"))
+	database, err := kvlite.Open(path, kvlite.WithDriver("leveldb"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,11 +38,11 @@ func TestRocksDBDriverOpensAndPersistsKVLiteRecords(t *testing.T) {
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Backend != "rocksdb" || manifest.Driver != "grocksdb" {
+	if manifest.Backend != "leveldb" || manifest.Driver != "goleveldb" {
 		t.Fatalf("unexpected driver manifest: %#v", manifest)
 	}
 
-	reopened, err := kvlite.Open(path, kvlite.WithDriver("rocksdb"))
+	reopened, err := kvlite.Open(path, kvlite.WithDriver("leveldb"))
 	if err != nil {
 		t.Fatal(err)
 	}
