@@ -262,3 +262,90 @@ func TestServeStandaloneModeRejectsUnknownMode(t *testing.T) {
 		t.Fatalf("run(serve unknown mode) = %d, want 2", got)
 	}
 }
+
+func TestServeStandaloneModeRunsRedisModule(t *testing.T) {
+	if runtime.GOOS == "js" || runtime.GOOS == "wasip1" {
+		t.Skip("standalone module execution is not supported")
+	}
+	root := t.TempDir()
+	moduleDirectory := filepath.Join(root, "redis")
+	sourcePath := filepath.Join(moduleDirectory, "main.go")
+	binaryName := "kvlite-redis"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binaryPath := filepath.Join(moduleDirectory, "bin", binaryName)
+	markerPath := filepath.Join(root, "serve-redis-marker.txt")
+
+	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	program := fmt.Sprintf(`
+package main
+
+import (
+	"flag"
+	"os"
+)
+
+func main() {
+	flags := flag.NewFlagSet("kvlite-redis", flag.ContinueOnError)
+	path := flags.String("path", "", "")
+	_ = flags.String("listen", "", "")
+	_ = flags.String("driver", "", "")
+	_ = flags.String("password", "", "")
+	if err := flags.Parse(os.Args[1:]); err != nil {
+		panic(err)
+	}
+	if *path == "" {
+		panic("path is required")
+	}
+	_ = os.WriteFile(%q, []byte(*path), 0o600)
+}
+`, markerPath)
+	if err := os.WriteFile(sourcePath, []byte(program), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("go", "build", "-o", binaryPath, sourcePath).CombinedOutput(); err != nil {
+		t.Fatalf("go build redis module executable: %v: %s", err, out)
+	}
+
+	payload, err := os.ReadFile(binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksum := sha256.Sum256(payload)
+	manifestPath := filepath.Join(moduleDirectory, kvlite.ModuleManifestFilename)
+	manifest := fmt.Sprintf(`{
+  "schema_version": 1,
+  "name": "redis",
+  "kind": "extension",
+  "version": "v0.1.0",
+  "module_abi": 1,
+  "capabilities": ["redis-resp2", "redis-server"],
+  "license": "Apache-2.0",
+  "artifacts": [{
+    "platform": "`+runtime.GOOS+`-`+runtime.GOARCH+`",
+    "kind": "executable",
+    "path": "bin/%s",
+    "sha256": "%s"
+  }]
+}`, binaryName, hex.EncodeToString(checksum[:]))
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("KVLITE_MODULE_PATH", root)
+	t.Setenv("KVLITE_HOME", "")
+	dataPath := filepath.Join(root, "data")
+	if got := run([]string{"serve", "--path", dataPath, "--extension-mode", "standalone", "--redis-listen", "127.0.0.1:6379"}); got != 0 {
+		t.Fatalf("run(serve standalone redis) = %d, want 0", got)
+	}
+	written, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("standalone redis marker missing: %v", err)
+	}
+	if string(written) != dataPath {
+		t.Fatalf("standalone redis marker contains %q, want %q", string(written), dataPath)
+	}
+}

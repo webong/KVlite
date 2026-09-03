@@ -43,6 +43,17 @@ func run(args []string) int {
 	}
 	serveFlags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	serveFlags.SetOutput(os.Stderr)
+	listenExplicit := false
+	for _, arg := range args[1:] {
+		switch arg {
+		case "--listen":
+			listenExplicit = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--listen=") {
+			listenExplicit = true
+		}
+	}
 	path := serveFlags.String("path", "", "KVLite database directory to own")
 	driver := serveFlags.String("driver", "", "installed storage driver (defaults to the bundle driver)")
 	backend := serveFlags.String("backend", "", "deprecated alias for --driver")
@@ -71,6 +82,7 @@ func run(args []string) int {
 	if *driver == "" {
 		*driver = string(kvlite.DefaultDriver())
 	}
+	httpListenExplicit := listenExplicit
 
 	mode := strings.ToLower(strings.TrimSpace(*extensionMode))
 	switch mode {
@@ -81,7 +93,7 @@ func run(args []string) int {
 	}
 
 	if mode == extensionModeStandalone {
-		if *redisListen != "" && *listen != "" {
+		if *redisListen != "" && *listen != "" && httpListenExplicit {
 			fmt.Fprintln(os.Stderr, "kvlite: extension-mode=standalone cannot run HTTP and Redis simultaneously in one process")
 			fmt.Fprintln(os.Stderr, "Use --listen with linked mode for HTTP+Redis, or run one standalone extension binary directly.")
 			return 1
