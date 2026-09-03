@@ -12,8 +12,6 @@ import (
 	"syscall"
 
 	"github.com/webong/kvlite"
-	kvlitehttp "github.com/webong/kvlite/extensions/http"
-	kvliteredis "github.com/webong/kvlite/extensions/redis"
 )
 
 const (
@@ -22,14 +20,38 @@ const (
 	extensionModeStandalone = "standalone"
 )
 
-var isHTTPExtensionLinked = func() bool {
-	_, err := kvlite.LinkedModule("http")
-	return err == nil
+type linkedHTTPServer interface {
+	URL() string
+	Close() error
 }
 
-var isRedisExtensionLinked = func() bool {
-	_, err := kvlite.LinkedModule("redis")
-	return err == nil
+type linkedRedisServer interface {
+	URL() string
+	Close() error
+}
+
+type linkedHTTPServeConfig struct {
+	listenAddress   string
+	bearerToken     string
+	maxRequestBytes int64
+	driverPaths     map[kvlite.DriverName]string
+	redisURL        string
+}
+
+type linkedRedisServeConfig struct {
+	listenAddress string
+	password      string
+}
+
+var isHTTPExtensionLinked = func() bool { return false }
+var isRedisExtensionLinked = func() bool { return false }
+
+var linkedHTTPServe = func(*kvlite.DB, linkedHTTPServeConfig) (linkedHTTPServer, error) {
+	return nil, fmt.Errorf("http extension linking is not enabled in this binary")
+}
+
+var linkedRedisServe = func(*kvlite.DB, linkedRedisServeConfig) (linkedRedisServer, error) {
+	return nil, fmt.Errorf("redis extension linking is not enabled in this binary")
 }
 
 func main() {
@@ -147,33 +169,41 @@ func run(args []string) int {
 		return 1
 	}
 	defer db.Close()
-	var redisServer *kvliteredis.Server
+	var redisServer linkedRedisServer
 	redisURL := ""
 	if *redisListen != "" {
-		redisServer, err = kvliteredis.Serve(db, kvliteredis.Options{
-			ListenAddress: *redisListen,
-			Password:      *redisPassword,
+		redisServer, err = linkedRedisServe(db, linkedRedisServeConfig{
+			listenAddress: *redisListen,
+			password:      *redisPassword,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
 			return 1
 		}
-		defer redisServer.Close()
 		redisURL = redisServer.URL()
+		defer func() {
+			if err := redisServer.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "kvlite: redis extension close failed: %v\n", err)
+			}
+		}()
 	}
 
-	server, err := kvlitehttp.Serve(db, kvlitehttp.Options{
-		ListenAddress:   *listen,
-		BearerToken:     *token,
-		MaxRequestBytes: *maxRequestBytes,
-		DriverPaths:     driverPaths.items,
-		RedisURL:        redisURL,
+	server, err := linkedHTTPServe(db, linkedHTTPServeConfig{
+		listenAddress:   *listen,
+		bearerToken:     *token,
+		maxRequestBytes: *maxRequestBytes,
+		driverPaths:     driverPaths.items,
+		redisURL:        redisURL,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
 		return 1
 	}
-	defer server.Close()
+	defer func() {
+		if err := server.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "kvlite: http extension close failed: %v\n", err)
+		}
+	}()
 	fmt.Printf("driver=%s\n", db.Backend())
 	fmt.Printf("http=%s\n", server.URL())
 	if redisServer != nil {
