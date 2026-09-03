@@ -2,9 +2,7 @@ package kvlite
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -117,122 +115,6 @@ func TestBackendManifestRejectsDifferentDriver(t *testing.T) {
 	_, err = prepareBackendManifest(path, otherDriver, false)
 	if !errors.Is(err, ErrBackendMismatch) {
 		t.Fatalf("prepareBackendManifest() error = %v, want ErrBackendMismatch", err)
-	}
-}
-
-func TestSharedServerRoutesExplicitRemoteDriver(t *testing.T) {
-	primaryPath := filepath.Join(t.TempDir(), "primary")
-	secondaryPath := filepath.Join(t.TempDir(), "secondary")
-	owner, err := Open(primaryPath,
-		WithDriver(string(testMemoryDriverName)),
-		WithSharing(SharingOptions{
-			ListenAddress: "127.0.0.1:0",
-			DriverPaths: map[DriverName]string{
-				testOtherDriverName: secondaryPath,
-			},
-		}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = owner.Close() })
-
-	remote, err := OpenRemote(owner.SharingAddress(), RemoteOptions{}, WithDriver(string(testOtherDriverName)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = remote.Close() })
-	ctx := context.Background()
-	if err := remote.Put(ctx, "selected", "secondary"); err != nil {
-		t.Fatal(err)
-	}
-
-	secondary := owner.server.databases.databases[testOtherDriverName]
-	var value string
-	if err := secondary.Get(ctx, "selected", &value); err != nil || value != "secondary" {
-		t.Fatalf("secondary database value/error = %q, %v", value, err)
-	}
-	if err := owner.Get(ctx, "selected", &value); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("primary database unexpectedly received remote value: %v", err)
-	}
-
-	request, err := http.NewRequest(http.MethodGet, owner.SharingAddress()+"/v1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set(driverHeader, string(testOtherDriverName))
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("GET /v1 status = %s", response.Status)
-	}
-	var metadata struct {
-		Driver  DriverName   `json:"driver"`
-		Drivers []DriverInfo `json:"drivers"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&metadata); err != nil {
-		t.Fatal(err)
-	}
-	if metadata.Driver != testOtherDriverName || len(metadata.Drivers) != 2 {
-		t.Fatalf("unexpected discovery metadata: %#v", metadata)
-	}
-}
-
-func TestSharedServerRejectsMissingRemoteDriverClearly(t *testing.T) {
-	owner, err := Open(t.TempDir(),
-		WithDriver(string(testMemoryDriverName)),
-		WithSharing(SharingOptions{ListenAddress: "127.0.0.1:0"}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = owner.Close() })
-
-	_, err = OpenRemote(owner.SharingAddress(), RemoteOptions{}, WithDriver(string(testOtherDriverName)))
-	if !errors.Is(err, ErrDriverNotExposed) {
-		t.Fatalf("OpenRemote() error = %v, want ErrDriverNotExposed", err)
-	}
-	var notExposed *RemoteDriverError
-	if !errors.As(err, &notExposed) || notExposed.Code != "driver_not_exposed" {
-		t.Fatalf("unmapped remote driver error = %#v", err)
-	}
-
-	request, err := http.NewRequest(http.MethodGet, owner.SharingAddress()+"/v1/health", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set(driverHeader, "berkeleydb")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusNotImplemented {
-		t.Fatalf("missing driver response = %s, want 501", response.Status)
-	}
-	var payload struct {
-		Error struct {
-			Code   string     `json:"code"`
-			Driver DriverName `json:"driver"`
-		} `json:"error"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.Error.Code != "driver_not_installed" || payload.Error.Driver != DriverBerkeleyDB {
-		t.Fatalf("missing driver payload = %#v", payload)
-	}
-
-	_, err = OpenRemote(owner.SharingAddress(), RemoteOptions{}, WithDriver("berkeleydb"))
-	if !errors.Is(err, ErrDriverNotInstalled) {
-		t.Fatalf("OpenRemote() error = %v, want ErrDriverNotInstalled", err)
-	}
-	var remoteDriverError *RemoteDriverError
-	if !errors.As(err, &remoteDriverError) || remoteDriverError.Code != "driver_not_installed" {
-		t.Fatalf("remote driver error = %#v", err)
 	}
 }
 

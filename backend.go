@@ -197,6 +197,13 @@ func DefaultDriver() DriverName {
 
 func (driver DriverName) String() string { return string(driver) }
 
+// ParseDriverName validates and canonicalizes a storage driver name. It is
+// useful to optional extensions that accept a driver name without selecting a
+// local directory themselves.
+func ParseDriverName(name string) (DriverName, error) {
+	return normalizeDriverName(DriverName(name))
+}
+
 func normalizeDriverName(name DriverName) (DriverName, error) {
 	canonical := DriverName(strings.ToLower(strings.TrimSpace(string(name))))
 	if canonical == "" {

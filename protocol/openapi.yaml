@@ -3,9 +3,10 @@ info:
   title: KVLite HTTP API
   version: 1.0.0
   description: |
-    Language-neutral JSON API served by `kvlite serve`. Keys are encoded as
-    unpadded base64url in the path so arbitrary UTF-8 and binary-safe key names
-    cannot change the URL grammar.
+    Language-neutral JSON API served by KVLite's optional HTTP extension (and
+    bundled by `kvlite serve`). Keys are encoded as unpadded base64url in the
+    path so arbitrary UTF-8 and binary-safe key names cannot change the URL
+    grammar.
 servers:
   - url: http://127.0.0.1:8089
 security:
@@ -172,7 +173,7 @@ components:
         redis:
           type: string
           format: uri
-          description: Optional Redis RESP endpoint when enabled by the owner.
+          description: Optional Redis RESP endpoint when the owner independently enables the Redis extension for this primary driver mapping.
     Driver:
       type: object
       required: [driver, backend, implementation, format, version, available, physical_ttl_compacts]

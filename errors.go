@@ -39,5 +39,4 @@ var (
 	// error so callers can explain that Berkeley DB needs an explicit,
 	// license-reviewed distribution choice.
 	ErrBerkeleyDBNotBuilt = errors.New("kvlite: Berkeley DB support is not built; choose and package a licensed Berkeley DB distribution first")
-	errRedisWrongType     = errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
 )

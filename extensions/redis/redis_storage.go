@@ -1,10 +1,13 @@
-package kvlite
+package kvliteredis
 
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/webong/kvlite"
 )
 
 const (
@@ -15,7 +18,62 @@ const (
 	redisTypeList   = "list"
 )
 
-func (db *DB) redisKeyExpired(ctx context.Context, key string) (bool, error) {
+const bytesCodec = "bytes"
+
+var errRedisWrongType = errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+
+// database adapts KVLite's stable protocol-store contract to Redis command
+// semantics. Keeping it private makes the only public extension entry point
+// Serve and avoids exposing RESP implementation details to embedded users.
+type database struct {
+	store  kvlite.ProtocolStore
+	engine kvlite.TransportStore
+	cfg    redisConfig
+}
+
+type redisConfig struct {
+	now func() time.Time
+}
+
+type redisRecord struct {
+	expiresAt int64
+	codec     string
+	payload   []byte
+}
+
+func newDatabase(store kvlite.ProtocolStore) *database {
+	return &database{
+		store:  store,
+		engine: store,
+		cfg:    redisConfig{now: store.Now},
+	}
+}
+
+func (db *database) putPayload(ctx context.Context, key []byte, codec string, payload []byte, ttl time.Duration) error {
+	var expiresAt int64
+	if ttl > 0 {
+		expiresAt = db.cfg.now().Add(ttl).UnixNano()
+	}
+	encoded, err := db.store.EncodeRecord(codec, payload, expiresAt)
+	if err != nil {
+		return err
+	}
+	return db.engine.Put(ctx, key, encoded)
+}
+
+func (db *database) decodeRecord(data []byte) (redisRecord, error) {
+	value, err := db.store.DecodeRecord(data)
+	if err != nil {
+		return redisRecord{}, err
+	}
+	return redisRecord{expiresAt: value.ExpiresAt, codec: value.Codec, payload: value.Payload}, nil
+}
+
+func (db *database) encodeRecord(codec string, payload []byte, expiresAt int64) ([]byte, error) {
+	return db.store.EncodeRecord(codec, payload, expiresAt)
+}
+
+func (db *database) redisKeyExpired(ctx context.Context, key string) (bool, error) {
 	expiresAt, found, err := db.redisMetadataExpiry(ctx, key)
 	if err != nil || !found {
 		return false, err
@@ -27,8 +85,8 @@ func (db *DB) redisKeyExpired(ctx context.Context, key string) (bool, error) {
 	return true, err
 }
 
-func (db *DB) redisMetadataExpiry(ctx context.Context, key string) (int64, bool, error) {
-	data, found, err := db.engine.Get(ctx, redisTTLKey(key))
+func (db *database) redisMetadataExpiry(ctx context.Context, key string) (int64, bool, error) {
+	data, found, err := db.engine.Get(ctx, db.store.CollectionTTLKey(key))
 	if err != nil || !found {
 		return 0, found, err
 	}
@@ -44,7 +102,7 @@ func encodeRedisExpiry(expiresAt int64) []byte {
 	return data
 }
 
-func (db *DB) redisType(ctx context.Context, key string) (string, error) {
+func (db *database) redisType(ctx context.Context, key string) (string, error) {
 	expired, err := db.redisKeyExpired(ctx, key)
 	if err != nil {
 		return redisTypeNone, err
@@ -53,25 +111,25 @@ func (db *DB) redisType(ctx context.Context, key string) (string, error) {
 		return redisTypeNone, nil
 	}
 
-	if data, found, err := db.engine.Get(ctx, valueKey(key)); err != nil {
+	if data, found, err := db.engine.Get(ctx, db.store.ValueKey(key)); err != nil {
 		return redisTypeNone, err
 	} else if found {
-		value, err := unmarshalEnvelope(data)
+		value, err := db.decodeRecord(data)
 		if err != nil {
 			return redisTypeNone, err
 		}
 		if value.expiresAt > 0 && db.cfg.now().UnixNano() >= value.expiresAt {
-			_ = db.engine.Delete(ctx, valueKey(key))
+			_ = db.engine.Delete(ctx, db.store.ValueKey(key))
 		} else {
 			return redisTypeString, nil
 		}
 	}
 
-	hashPrefix := namespacePrefix(kindHash, key)
+	hashPrefix := db.store.HashPrefix(key)
 	var hashKeys [][]byte
 	hashFound := false
 	if err := db.engine.ScanPrefix(ctx, hashPrefix, func(storageKey, data []byte) error {
-		value, err := unmarshalEnvelope(data)
+		value, err := db.decodeRecord(data)
 		if err != nil {
 			return err
 		}
@@ -101,7 +159,7 @@ func (db *DB) redisType(ctx context.Context, key string) (string, error) {
 	}
 
 	setFound := false
-	if err := db.engine.ScanPrefix(ctx, namespacePrefix(kindSet, key), func(_, _ []byte) error {
+	if err := db.engine.ScanPrefix(ctx, db.store.SetPrefix(key), func(_, _ []byte) error {
 		setFound = true
 		return nil
 	}); err != nil {
@@ -111,10 +169,10 @@ func (db *DB) redisType(ctx context.Context, key string) (string, error) {
 		return redisTypeSet, nil
 	}
 
-	if data, found, err := db.engine.Get(ctx, listKey(key)); err != nil {
+	if data, found, err := db.engine.Get(ctx, db.store.ListKey(key)); err != nil {
 		return redisTypeNone, err
 	} else if found {
-		items, err := decodeList(data)
+		items, err := db.store.DecodeList(data)
 		if err != nil {
 			return redisTypeNone, err
 		}
@@ -126,36 +184,11 @@ func (db *DB) redisType(ctx context.Context, key string) (string, error) {
 	return redisTypeNone, nil
 }
 
-func (db *DB) redisDeleteRaw(ctx context.Context, key string) (bool, error) {
-	// Value, list, and expiry records are exact keys. Scanning their prefixes
-	// would also remove a sibling such as "user:10" when deleting "user:1".
-	keys := make([][]byte, 0, 4)
-	for _, storageKey := range [][]byte{valueKey(key), listKey(key), redisTTLKey(key)} {
-		_, found, err := db.engine.Get(ctx, storageKey)
-		if err != nil {
-			return false, err
-		}
-		if found {
-			keys = append(keys, storageKey)
-		}
-	}
-	for _, prefix := range [][]byte{namespacePrefix(kindHash, key), namespacePrefix(kindSet, key)} {
-		if err := db.engine.ScanPrefix(ctx, prefix, func(storageKey, _ []byte) error {
-			keys = append(keys, append([]byte(nil), storageKey...))
-			return nil
-		}); err != nil {
-			return false, err
-		}
-	}
-	for _, storageKey := range keys {
-		if err := db.engine.Delete(ctx, storageKey); err != nil {
-			return false, err
-		}
-	}
-	return len(keys) > 0, nil
+func (db *database) redisDeleteRaw(ctx context.Context, key string) (bool, error) {
+	return db.store.DeleteLogicalKey(ctx, key)
 }
 
-func (db *DB) redisString(ctx context.Context, key string) ([]byte, bool, error) {
+func (db *database) redisString(ctx context.Context, key string) ([]byte, bool, error) {
 	typ, err := db.redisType(ctx, key)
 	if err != nil {
 		return nil, false, err
@@ -166,11 +199,11 @@ func (db *DB) redisString(ctx context.Context, key string) ([]byte, bool, error)
 	if typ != redisTypeString {
 		return nil, false, fmt.Errorf("%w: %s", errRedisWrongType, typ)
 	}
-	data, found, err := db.engine.Get(ctx, valueKey(key))
+	data, found, err := db.engine.Get(ctx, db.store.ValueKey(key))
 	if err != nil || !found {
 		return nil, false, err
 	}
-	value, err := unmarshalEnvelope(data)
+	value, err := db.decodeRecord(data)
 	if err != nil {
 		return nil, false, err
 	}
@@ -181,34 +214,34 @@ func (db *DB) redisString(ctx context.Context, key string) ([]byte, bool, error)
 	return append([]byte(nil), value.payload...), true, nil
 }
 
-func (db *DB) redisWriteString(ctx context.Context, key string, value []byte, expiresAt int64) error {
+func (db *database) redisWriteString(ctx context.Context, key string, value []byte, expiresAt int64) error {
 	if expiresAt <= 0 {
-		if err := db.putPayload(ctx, valueKey(key), BytesCodec{}.Name(), value, 0); err != nil {
+		if err := db.putPayload(ctx, db.store.ValueKey(key), bytesCodec, value, 0); err != nil {
 			return err
 		}
 		// Strings keep expiry in their envelope; collection metadata must not
 		// linger when a key changes type or is recreated.
-		return db.engine.Delete(ctx, redisTTLKey(key))
+		return db.engine.Delete(ctx, db.store.CollectionTTLKey(key))
 	}
 	duration := time.Unix(0, expiresAt).Sub(db.cfg.now())
 	if duration <= 0 {
 		_, err := db.redisDeleteRaw(ctx, key)
 		return err
 	}
-	return db.putPayload(ctx, valueKey(key), BytesCodec{}.Name(), value, duration)
+	return db.putPayload(ctx, db.store.ValueKey(key), bytesCodec, value, duration)
 }
 
-func (db *DB) redisExpiry(ctx context.Context, key string) (int64, bool, error) {
+func (db *database) redisExpiry(ctx context.Context, key string) (int64, bool, error) {
 	typ, err := db.redisType(ctx, key)
 	if err != nil || typ == redisTypeNone {
 		return 0, false, err
 	}
 	if typ == redisTypeString {
-		data, found, err := db.engine.Get(ctx, valueKey(key))
+		data, found, err := db.engine.Get(ctx, db.store.ValueKey(key))
 		if err != nil || !found {
 			return 0, false, err
 		}
-		value, err := unmarshalEnvelope(data)
+		value, err := db.decodeRecord(data)
 		if err != nil {
 			return 0, false, err
 		}
@@ -220,7 +253,7 @@ func (db *DB) redisExpiry(ctx context.Context, key string) (int64, bool, error) 
 	return db.redisMetadataExpiry(ctx, key)
 }
 
-func (db *DB) redisSetExpiry(ctx context.Context, key string, expiresAt int64) (bool, error) {
+func (db *database) redisSetExpiry(ctx context.Context, key string, expiresAt int64) (bool, error) {
 	typ, err := db.redisType(ctx, key)
 	if err != nil || typ == redisTypeNone {
 		return false, err
@@ -230,42 +263,42 @@ func (db *DB) redisSetExpiry(ctx context.Context, key string, expiresAt int64) (
 		return err == nil, err
 	}
 	if typ == redisTypeString {
-		data, found, err := db.engine.Get(ctx, valueKey(key))
+		data, found, err := db.engine.Get(ctx, db.store.ValueKey(key))
 		if err != nil || !found {
 			return false, err
 		}
-		value, err := unmarshalEnvelope(data)
+		value, err := db.decodeRecord(data)
 		if err != nil {
 			return false, err
 		}
 		if err := db.redisWriteStringWithCodec(ctx, key, value.payload, value.codec, expiresAt); err != nil {
 			return false, err
 		}
-		_ = db.engine.Delete(ctx, redisTTLKey(key))
+		_ = db.engine.Delete(ctx, db.store.CollectionTTLKey(key))
 		return true, nil
 	}
-	if err := db.engine.Put(ctx, redisTTLKey(key), encodeRedisExpiry(expiresAt)); err != nil {
+	if err := db.engine.Put(ctx, db.store.CollectionTTLKey(key), encodeRedisExpiry(expiresAt)); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (db *DB) redisWriteStringWithCodec(ctx context.Context, key string, payload []byte, codec string, expiresAt int64) error {
+func (db *database) redisWriteStringWithCodec(ctx context.Context, key string, payload []byte, codec string, expiresAt int64) error {
 	if expiresAt <= 0 {
-		if err := db.putPayload(ctx, valueKey(key), codec, payload, 0); err != nil {
+		if err := db.putPayload(ctx, db.store.ValueKey(key), codec, payload, 0); err != nil {
 			return err
 		}
-		return db.engine.Delete(ctx, redisTTLKey(key))
+		return db.engine.Delete(ctx, db.store.CollectionTTLKey(key))
 	}
 	duration := time.Unix(0, expiresAt).Sub(db.cfg.now())
 	if duration <= 0 {
 		_, err := db.redisDeleteRaw(ctx, key)
 		return err
 	}
-	return db.putPayload(ctx, valueKey(key), codec, payload, duration)
+	return db.putPayload(ctx, db.store.ValueKey(key), codec, payload, duration)
 }
 
-func (db *DB) redisPersist(ctx context.Context, key string) (bool, error) {
+func (db *database) redisPersist(ctx context.Context, key string) (bool, error) {
 	typ, err := db.redisType(ctx, key)
 	if err != nil || typ == redisTypeNone {
 		return false, err
@@ -275,24 +308,24 @@ func (db *DB) redisPersist(ctx context.Context, key string) (bool, error) {
 		return false, err
 	}
 	if typ == redisTypeString {
-		data, exists, err := db.engine.Get(ctx, valueKey(key))
+		data, exists, err := db.engine.Get(ctx, db.store.ValueKey(key))
 		if err != nil || !exists {
 			return false, err
 		}
-		value, err := unmarshalEnvelope(data)
+		value, err := db.decodeRecord(data)
 		if err != nil {
 			return false, err
 		}
-		if err := db.putPayload(ctx, valueKey(key), value.codec, value.payload, 0); err != nil {
+		if err := db.putPayload(ctx, db.store.ValueKey(key), value.codec, value.payload, 0); err != nil {
 			return false, err
 		}
-	} else if err := db.engine.Delete(ctx, redisTTLKey(key)); err != nil {
+	} else if err := db.engine.Delete(ctx, db.store.CollectionTTLKey(key)); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (db *DB) redisHashField(ctx context.Context, key, field string) ([]byte, bool, error) {
+func (db *database) redisHashField(ctx context.Context, key, field string) ([]byte, bool, error) {
 	typ, err := db.redisType(ctx, key)
 	if err != nil {
 		return nil, false, err
@@ -303,12 +336,12 @@ func (db *DB) redisHashField(ctx context.Context, key, field string) ([]byte, bo
 	if typ != redisTypeHash {
 		return nil, false, fmt.Errorf("%w: %s", errRedisWrongType, typ)
 	}
-	storageKey := namespacedKey(kindHash, key, field)
+	storageKey := db.store.HashKey(key, field)
 	data, found, err := db.engine.Get(ctx, storageKey)
 	if err != nil || !found {
 		return nil, false, err
 	}
-	value, err := unmarshalEnvelope(data)
+	value, err := db.decodeRecord(data)
 	if err != nil {
 		return nil, false, err
 	}
@@ -319,7 +352,7 @@ func (db *DB) redisHashField(ctx context.Context, key, field string) ([]byte, bo
 	return append([]byte(nil), value.payload...), true, nil
 }
 
-func (db *DB) redisList(ctx context.Context, key string) ([][]byte, bool, error) {
+func (db *database) redisList(ctx context.Context, key string) ([][]byte, bool, error) {
 	typ, err := db.redisType(ctx, key)
 	if err != nil {
 		return nil, false, err
@@ -330,19 +363,19 @@ func (db *DB) redisList(ctx context.Context, key string) ([][]byte, bool, error)
 	if typ != redisTypeList {
 		return nil, false, fmt.Errorf("%w: %s", errRedisWrongType, typ)
 	}
-	data, found, err := db.engine.Get(ctx, listKey(key))
+	data, found, err := db.engine.Get(ctx, db.store.ListKey(key))
 	if err != nil || !found {
 		return nil, false, err
 	}
-	items, err := decodeList(data)
+	items, err := db.store.DecodeList(data)
 	if err != nil {
 		return nil, false, err
 	}
 	return items, true, nil
 }
 
-func redisItemPayload(data []byte, now time.Time) ([]byte, bool, error) {
-	value, err := unmarshalEnvelope(data)
+func (db *database) redisItemPayload(data []byte, now time.Time) ([]byte, bool, error) {
+	value, err := db.decodeRecord(data)
 	if err != nil {
 		return nil, false, err
 	}
@@ -352,10 +385,10 @@ func redisItemPayload(data []byte, now time.Time) ([]byte, bool, error) {
 	return append([]byte(nil), value.payload...), true, nil
 }
 
-func (db *DB) redisWriteList(ctx context.Context, key string, items [][]byte) error {
+func (db *database) redisWriteList(ctx context.Context, key string, items [][]byte) error {
 	if len(items) == 0 {
 		_, err := db.redisDeleteRaw(ctx, key)
 		return err
 	}
-	return db.engine.Put(ctx, listKey(key), encodeList(items))
+	return db.engine.Put(ctx, db.store.ListKey(key), db.store.EncodeList(items))
 }

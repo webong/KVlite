@@ -3,11 +3,7 @@ package kvlite
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"io"
-	"net/http"
 	"sort"
 	"sync"
 	"testing"
@@ -140,6 +136,27 @@ func TestPutBytesPreservesSerializedPayload(t *testing.T) {
 	}
 }
 
+func TestOpenWithEngineSupportsProtocolExtensions(t *testing.T) {
+	db, err := OpenWithEngine(newMemoryEngine(), BackendRemote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if got := db.Backend(); got != BackendRemote {
+		t.Fatalf("Backend() = %q, want %q", got, BackendRemote)
+	}
+	if err := db.PutStoredValue(context.Background(), "wire", "json", []byte(`{"answer":42}`), TTL(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := db.GetStoredValue(context.Background(), "wire")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Codec != "json" || !bytes.Equal(stored.Payload, []byte(`{"answer":42}`)) || stored.ExpiresAt == 0 {
+		t.Fatalf("GetStoredValue() = %#v", stored)
+	}
+}
+
 func TestTTLIsEnforcedAtReadAndLazilyDeleted(t *testing.T) {
 	now := time.Date(2026, 8, 28, 10, 0, 0, 0, time.UTC)
 	db, storage := testDB(t, func(cfg *config) error {
@@ -210,92 +227,6 @@ func reflectStrings(left, right []string) bool {
 		}
 	}
 	return true
-}
-
-func TestSharingRoundTripAndAuthentication(t *testing.T) {
-	owner, _ := testDB(t, WithSharing(SharingOptions{
-		ListenAddress: "127.0.0.1:0",
-		BearerToken:   "secret",
-	}))
-	remote, err := OpenRemote(owner.SharingAddress(), RemoteOptions{BearerToken: "secret"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = remote.Close() })
-	ctx := context.Background()
-	if err := remote.Put(ctx, "shared", map[string]int{"answer": 42}); err != nil {
-		t.Fatal(err)
-	}
-	var value map[string]int
-	if err := owner.Get(ctx, "shared", &value); err != nil {
-		t.Fatal(err)
-	}
-	if value["answer"] != 42 {
-		t.Fatalf("unexpected remote value: %#v", value)
-	}
-	if length, err := remote.RPush(ctx, "remote-jobs", "one", "two"); err != nil || length != 2 {
-		t.Fatalf("remote RPush() = %d, %v", length, err)
-	}
-	var jobs []string
-	if err := owner.LRange(ctx, "remote-jobs", 0, -1, &jobs); err != nil || !reflectStrings(jobs, []string{"one", "two"}) {
-		t.Fatalf("owner LRange() = %#v, %v", jobs, err)
-	}
-	unauthorized, err := OpenRemote(owner.SharingAddress(), RemoteOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer unauthorized.Close()
-	if err := unauthorized.Get(ctx, "shared", &value); err == nil {
-		t.Fatal("unauthenticated read unexpectedly succeeded")
-	}
-}
-
-func TestPublicJSONHTTPAPI(t *testing.T) {
-	owner, _ := testDB(t, WithSharing(SharingOptions{ListenAddress: "127.0.0.1:0"}))
-	baseURL := owner.SharingAddress()
-	key := base64.RawURLEncoding.EncodeToString([]byte("http-key"))
-	putRequest, err := http.NewRequest(http.MethodPut, baseURL+"/v1/entries/"+key+"?ttl_seconds=60", bytes.NewBufferString(`{"answer":42}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	putRequest.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(putRequest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusNoContent {
-		t.Fatalf("PUT status = %s", response.Status)
-	}
-	response, err = http.Get(baseURL + "/v1/entries/" + key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.StatusCode != http.StatusOK || string(body) != `{"answer":42}` {
-		t.Fatalf("GET status/body = %s/%s", response.Status, body)
-	}
-	discovery, err := http.Get(baseURL + "/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer discovery.Body.Close()
-	if discovery.StatusCode != http.StatusOK {
-		t.Fatalf("discovery status = %s", discovery.Status)
-	}
-	var metadata struct {
-		Backend Backend `json:"backend"`
-	}
-	if err := json.NewDecoder(discovery.Body).Decode(&metadata); err != nil {
-		t.Fatal(err)
-	}
-	if metadata.Backend != BackendRocksDB {
-		t.Fatalf("discovery backend = %q, want %q", metadata.Backend, BackendRocksDB)
-	}
 }
 
 func TestCloseIsIdempotent(t *testing.T) {

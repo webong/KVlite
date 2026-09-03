@@ -1,8 +1,7 @@
-package kvlite
+package kvliteredis
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
@@ -11,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/webong/kvlite"
 )
 
 const (
@@ -25,7 +26,7 @@ func redisErrorReply(err error) respValue {
 	if errors.Is(err, errRedisWrongType) {
 		return respErrorString(errRedisWrongType.Error())
 	}
-	if errors.Is(err, ErrClosed) {
+	if errors.Is(err, kvlite.ErrClosed) {
 		return respErrorString("ERR database is closed")
 	}
 	return respErrorString("ERR " + err.Error())
@@ -63,7 +64,7 @@ type redisSetOptions struct {
 	keepTTL   bool
 }
 
-func (db *DB) redisSetOptions(args [][]byte) (redisSetOptions, error) {
+func (db *database) redisSetOptions(args [][]byte) (redisSetOptions, error) {
 	options := redisSetOptions{}
 	for index := 3; index < len(args); index++ {
 		switch strings.ToUpper(string(args[index])) {
@@ -128,7 +129,7 @@ func (db *DB) redisSetOptions(args [][]byte) (redisSetOptions, error) {
 	return options, nil
 }
 
-func (db *DB) redisGet(args [][]byte) respValue {
+func (db *database) redisGet(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -142,7 +143,7 @@ func (db *DB) redisGet(args [][]byte) respValue {
 	return respBulkBytes(value)
 }
 
-func (db *DB) redisSet(args [][]byte) respValue {
+func (db *database) redisSet(args [][]byte) respValue {
 	if len(args) < 3 {
 		return redisSyntaxError()
 	}
@@ -188,14 +189,14 @@ func (db *DB) redisSet(args [][]byte) respValue {
 	return respSimpleString("OK")
 }
 
-func (db *DB) redisDeleteAndWriteString(key string, value []byte, expiresAt int64) error {
+func (db *database) redisDeleteAndWriteString(key string, value []byte, expiresAt int64) error {
 	if _, err := db.redisDeleteRaw(context.Background(), key); err != nil {
 		return err
 	}
 	return db.redisWriteString(context.Background(), key, value, expiresAt)
 }
 
-func (db *DB) redisSetNX(args [][]byte) respValue {
+func (db *database) redisSetNX(args [][]byte) respValue {
 	if len(args) != 3 {
 		return redisSyntaxError()
 	}
@@ -212,7 +213,7 @@ func (db *DB) redisSetNX(args [][]byte) respValue {
 	return respIntegerValue(1)
 }
 
-func (db *DB) redisSetEX(args [][]byte, milliseconds bool) respValue {
+func (db *database) redisSetEX(args [][]byte, milliseconds bool) respValue {
 	if len(args) != 4 {
 		return redisSyntaxError()
 	}
@@ -242,7 +243,7 @@ func (db *DB) redisSetEX(args [][]byte, milliseconds bool) respValue {
 	return respSimpleString("OK")
 }
 
-func (db *DB) redisGetSet(args [][]byte) respValue {
+func (db *database) redisGetSet(args [][]byte) respValue {
 	if len(args) != 3 {
 		return redisSyntaxError()
 	}
@@ -263,7 +264,7 @@ func (db *DB) redisGetSet(args [][]byte) respValue {
 	return respBulkBytes(old)
 }
 
-func (db *DB) redisGetDel(args [][]byte) respValue {
+func (db *database) redisGetDel(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -281,7 +282,7 @@ func (db *DB) redisGetDel(args [][]byte) respValue {
 	return respBulkBytes(value)
 }
 
-func (db *DB) redisGetEx(args [][]byte) respValue {
+func (db *database) redisGetEx(args [][]byte) respValue {
 	if len(args) < 2 {
 		return redisSyntaxError()
 	}
@@ -330,7 +331,7 @@ func (db *DB) redisGetEx(args [][]byte) respValue {
 	return respBulkBytes(value)
 }
 
-func (db *DB) redisMGet(args [][]byte) respValue {
+func (db *database) redisMGet(args [][]byte) respValue {
 	if len(args) < 2 {
 		return redisSyntaxError()
 	}
@@ -349,7 +350,7 @@ func (db *DB) redisMGet(args [][]byte) respValue {
 	return respArrayValues(items...)
 }
 
-func (db *DB) redisMSet(args [][]byte) respValue {
+func (db *database) redisMSet(args [][]byte) respValue {
 	if len(args) < 3 || len(args)%2 != 1 {
 		return redisSyntaxError()
 	}
@@ -365,7 +366,7 @@ func (db *DB) redisMSet(args [][]byte) respValue {
 	return respSimpleString("OK")
 }
 
-func (db *DB) redisMSetNX(args [][]byte) respValue {
+func (db *database) redisMSetNX(args [][]byte) respValue {
 	if len(args) < 3 || len(args)%2 != 1 {
 		return redisSyntaxError()
 	}
@@ -386,7 +387,7 @@ func (db *DB) redisMSetNX(args [][]byte) respValue {
 	return respIntegerValue(1)
 }
 
-func (db *DB) redisStrLen(args [][]byte) respValue {
+func (db *database) redisStrLen(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -400,7 +401,7 @@ func (db *DB) redisStrLen(args [][]byte) respValue {
 	return respIntegerValue(int64(len(value)))
 }
 
-func (db *DB) redisAppend(args [][]byte) respValue {
+func (db *database) redisAppend(args [][]byte) respValue {
 	if len(args) != 3 {
 		return redisSyntaxError()
 	}
@@ -423,14 +424,14 @@ func (db *DB) redisAppend(args [][]byte) respValue {
 	return respIntegerValue(int64(len(value)))
 }
 
-func (db *DB) redisIncrementCommand(args [][]byte, delta int64) respValue {
+func (db *database) redisIncrementCommand(args [][]byte, delta int64) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
 	return db.redisIncrement(string(args[1]), delta)
 }
 
-func (db *DB) redisIncrementByCommand(args [][]byte, decrement bool) respValue {
+func (db *database) redisIncrementByCommand(args [][]byte, decrement bool) respValue {
 	if len(args) != 3 {
 		return redisSyntaxError()
 	}
@@ -448,11 +449,11 @@ func (db *DB) redisIncrementByCommand(args [][]byte, decrement bool) respValue {
 	return db.redisIncrement(string(args[1]), delta)
 }
 
-func (db *DB) redisIncrement(key string, delta int64) respValue {
+func (db *database) redisIncrement(key string, delta int64) respValue {
 	return db.redisIncrementBig(key, new(big.Int).SetInt64(delta))
 }
 
-func (db *DB) redisIncrementBig(key string, delta *big.Int) respValue {
+func (db *database) redisIncrementBig(key string, delta *big.Int) respValue {
 	value, found, err := db.redisString(context.Background(), key)
 	if err != nil {
 		return redisErrorReply(err)
@@ -478,7 +479,7 @@ func (db *DB) redisIncrementBig(key string, delta *big.Int) respValue {
 	return respIntegerValue(current.Int64())
 }
 
-func (db *DB) redisDelete(args [][]byte) respValue {
+func (db *database) redisDelete(args [][]byte) respValue {
 	if len(args) < 2 {
 		return redisSyntaxError()
 	}
@@ -495,7 +496,7 @@ func (db *DB) redisDelete(args [][]byte) respValue {
 	return respIntegerValue(count)
 }
 
-func (db *DB) redisExists(args [][]byte) respValue {
+func (db *database) redisExists(args [][]byte) respValue {
 	if len(args) < 2 {
 		return redisSyntaxError()
 	}
@@ -512,7 +513,7 @@ func (db *DB) redisExists(args [][]byte) respValue {
 	return respIntegerValue(count)
 }
 
-func (db *DB) redisTypeCommand(args [][]byte) respValue {
+func (db *database) redisTypeCommand(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -549,7 +550,7 @@ func redisExpiryFromCommand(now time.Time, command string, amount int64) (int64,
 	return current + delta, nil
 }
 
-func (db *DB) redisExpireCommand(args [][]byte, command string) respValue {
+func (db *database) redisExpireCommand(args [][]byte, command string) respValue {
 	if len(args) != 3 {
 		return redisSyntaxError()
 	}
@@ -571,7 +572,7 @@ func (db *DB) redisExpireCommand(args [][]byte, command string) respValue {
 	return respIntegerValue(1)
 }
 
-func (db *DB) redisTTLCommand(args [][]byte, command string) respValue {
+func (db *database) redisTTLCommand(args [][]byte, command string) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -604,7 +605,7 @@ func (db *DB) redisTTLCommand(args [][]byte, command string) respValue {
 	return respIntegerValue(value)
 }
 
-func (db *DB) redisPersistCommand(args [][]byte) respValue {
+func (db *database) redisPersistCommand(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -623,7 +624,7 @@ type redisHashEntry struct {
 	value []byte
 }
 
-func (db *DB) redisHashEntries(ctx context.Context, key string) ([]redisHashEntry, bool, error) {
+func (db *database) redisHashEntries(ctx context.Context, key string) ([]redisHashEntry, bool, error) {
 	typ, err := db.redisType(ctx, key)
 	if err != nil {
 		return nil, false, err
@@ -634,7 +635,7 @@ func (db *DB) redisHashEntries(ctx context.Context, key string) ([]redisHashEntr
 	if typ != redisTypeHash {
 		return nil, false, fmt.Errorf("%w: %s", errRedisWrongType, typ)
 	}
-	prefix := namespacePrefix(kindHash, key)
+	prefix := db.store.HashPrefix(key)
 	var records [][2][]byte
 	if err := db.engine.ScanPrefix(ctx, prefix, func(storageKey, data []byte) error {
 		records = append(records, [2][]byte{
@@ -648,7 +649,7 @@ func (db *DB) redisHashEntries(ctx context.Context, key string) ([]redisHashEntr
 	entries := make([]redisHashEntry, 0, len(records))
 	var expired [][]byte
 	for _, record := range records {
-		value, err := unmarshalEnvelope(record[1])
+		value, err := db.decodeRecord(record[1])
 		if err != nil {
 			return nil, false, err
 		}
@@ -676,7 +677,7 @@ func (db *DB) redisHashEntries(ctx context.Context, key string) ([]redisHashEntr
 	return entries, true, nil
 }
 
-func (db *DB) redisHSet(args [][]byte) respValue {
+func (db *database) redisHSet(args [][]byte) respValue {
 	if len(args) < 4 || len(args)%2 != 0 {
 		return redisSyntaxError()
 	}
@@ -690,12 +691,12 @@ func (db *DB) redisHSet(args [][]byte) respValue {
 	}
 	if typ == redisTypeNone {
 		// A stale expiry record should not apply to a newly-created hash.
-		_ = db.engine.Delete(context.Background(), redisTTLKey(key))
+		_ = db.engine.Delete(context.Background(), db.store.CollectionTTLKey(key))
 	}
 	var added int64
 	for index := 2; index < len(args); index += 2 {
 		field := string(args[index])
-		storageKey := namespacedKey(kindHash, key, field)
+		storageKey := db.store.HashKey(key, field)
 		_, found, err := db.engine.Get(context.Background(), storageKey)
 		if err != nil {
 			return redisErrorReply(err)
@@ -703,14 +704,14 @@ func (db *DB) redisHSet(args [][]byte) respValue {
 		if !found {
 			added++
 		}
-		if err := db.putPayload(context.Background(), storageKey, BytesCodec{}.Name(), args[index+1], 0); err != nil {
+		if err := db.putPayload(context.Background(), storageKey, bytesCodec, args[index+1], 0); err != nil {
 			return redisErrorReply(err)
 		}
 	}
 	return respIntegerValue(added)
 }
 
-func (db *DB) redisHGet(args [][]byte) respValue {
+func (db *database) redisHGet(args [][]byte) respValue {
 	if len(args) != 3 {
 		return redisSyntaxError()
 	}
@@ -724,7 +725,7 @@ func (db *DB) redisHGet(args [][]byte) respValue {
 	return respBulkBytes(value)
 }
 
-func (db *DB) redisHMGet(args [][]byte) respValue {
+func (db *database) redisHMGet(args [][]byte) respValue {
 	if len(args) < 3 {
 		return redisSyntaxError()
 	}
@@ -743,7 +744,7 @@ func (db *DB) redisHMGet(args [][]byte) respValue {
 	return respArrayValues(items...)
 }
 
-func (db *DB) redisHGetAll(args [][]byte) respValue {
+func (db *database) redisHGetAll(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -761,7 +762,7 @@ func (db *DB) redisHGetAll(args [][]byte) respValue {
 	return respArrayValues(items...)
 }
 
-func (db *DB) redisHDel(args [][]byte) respValue {
+func (db *database) redisHDel(args [][]byte) respValue {
 	if len(args) < 3 {
 		return redisSyntaxError()
 	}
@@ -775,7 +776,7 @@ func (db *DB) redisHDel(args [][]byte) respValue {
 	}
 	var removed int64
 	for _, field := range args[2:] {
-		storageKey := namespacedKey(kindHash, key, string(field))
+		storageKey := db.store.HashKey(key, string(field))
 		data, found, err := db.engine.Get(context.Background(), storageKey)
 		if err != nil {
 			return redisErrorReply(err)
@@ -783,7 +784,7 @@ func (db *DB) redisHDel(args [][]byte) respValue {
 		if !found {
 			continue
 		}
-		value, decodeErr := unmarshalEnvelope(data)
+		value, decodeErr := db.decodeRecord(data)
 		if decodeErr != nil {
 			return redisErrorReply(decodeErr)
 		}
@@ -804,7 +805,7 @@ func (db *DB) redisHDel(args [][]byte) respValue {
 	return respIntegerValue(removed)
 }
 
-func (db *DB) redisHExists(args [][]byte) respValue {
+func (db *database) redisHExists(args [][]byte) respValue {
 	if len(args) != 3 {
 		return redisSyntaxError()
 	}
@@ -818,7 +819,7 @@ func (db *DB) redisHExists(args [][]byte) respValue {
 	return respIntegerValue(0)
 }
 
-func (db *DB) redisHLen(args [][]byte) respValue {
+func (db *database) redisHLen(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -829,7 +830,7 @@ func (db *DB) redisHLen(args [][]byte) respValue {
 	return respIntegerValue(int64(len(entries)))
 }
 
-func (db *DB) redisHKeys(args [][]byte) respValue {
+func (db *database) redisHKeys(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -844,7 +845,7 @@ func (db *DB) redisHKeys(args [][]byte) respValue {
 	return respArrayValues(items...)
 }
 
-func (db *DB) redisHVals(args [][]byte) respValue {
+func (db *database) redisHVals(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -859,7 +860,7 @@ func (db *DB) redisHVals(args [][]byte) respValue {
 	return respArrayValues(items...)
 }
 
-func (db *DB) redisHIncrBy(args [][]byte) respValue {
+func (db *database) redisHIncrBy(args [][]byte) respValue {
 	if len(args) != 4 {
 		return redisSyntaxError()
 	}
@@ -889,13 +890,13 @@ func (db *DB) redisHIncrBy(args [][]byte) respValue {
 	if !current.IsInt64() {
 		return respErrorString("ERR increment or decrement would overflow")
 	}
-	if err := db.putPayload(context.Background(), namespacedKey(kindHash, key, field), BytesCodec{}.Name(), []byte(current.String()), 0); err != nil {
+	if err := db.putPayload(context.Background(), db.store.HashKey(key, field), bytesCodec, []byte(current.String()), 0); err != nil {
 		return redisErrorReply(err)
 	}
 	return respIntegerValue(current.Int64())
 }
 
-func (db *DB) redisSetMembers(ctx context.Context, key string) ([]string, bool, error) {
+func (db *database) redisSetMembers(ctx context.Context, key string) ([]string, bool, error) {
 	typ, err := db.redisType(ctx, key)
 	if err != nil {
 		return nil, false, err
@@ -906,7 +907,7 @@ func (db *DB) redisSetMembers(ctx context.Context, key string) ([]string, bool, 
 	if typ != redisTypeSet {
 		return nil, false, fmt.Errorf("%w: %s", errRedisWrongType, typ)
 	}
-	prefix := namespacePrefix(kindSet, key)
+	prefix := db.store.SetPrefix(key)
 	members := make([]string, 0)
 	if err := db.engine.ScanPrefix(ctx, prefix, func(storageKey, _ []byte) error {
 		members = append(members, string(storageKey[len(prefix):]))
@@ -922,7 +923,7 @@ func (db *DB) redisSetMembers(ctx context.Context, key string) ([]string, bool, 
 	return members, true, nil
 }
 
-func (db *DB) redisSAdd(args [][]byte) respValue {
+func (db *database) redisSAdd(args [][]byte) respValue {
 	if len(args) < 3 {
 		return redisSyntaxError()
 	}
@@ -935,11 +936,11 @@ func (db *DB) redisSAdd(args [][]byte) respValue {
 		return redisErrorReply(fmt.Errorf("%w: %s", errRedisWrongType, typ))
 	}
 	if typ == redisTypeNone {
-		_ = db.engine.Delete(context.Background(), redisTTLKey(key))
+		_ = db.engine.Delete(context.Background(), db.store.CollectionTTLKey(key))
 	}
 	var added int64
 	for _, member := range args[2:] {
-		storageKey := namespacedKey(kindSet, key, string(member))
+		storageKey := db.store.SetKey(key, string(member))
 		_, found, err := db.engine.Get(context.Background(), storageKey)
 		if err != nil {
 			return redisErrorReply(err)
@@ -955,7 +956,7 @@ func (db *DB) redisSAdd(args [][]byte) respValue {
 	return respIntegerValue(added)
 }
 
-func (db *DB) redisSRem(args [][]byte) respValue {
+func (db *database) redisSRem(args [][]byte) respValue {
 	if len(args) < 3 {
 		return redisSyntaxError()
 	}
@@ -972,7 +973,7 @@ func (db *DB) redisSRem(args [][]byte) respValue {
 	}
 	var removed int64
 	for _, member := range args[2:] {
-		storageKey := namespacedKey(kindSet, key, string(member))
+		storageKey := db.store.SetKey(key, string(member))
 		_, found, err := db.engine.Get(context.Background(), storageKey)
 		if err != nil {
 			return redisErrorReply(err)
@@ -993,7 +994,7 @@ func (db *DB) redisSRem(args [][]byte) respValue {
 	return respIntegerValue(removed)
 }
 
-func (db *DB) redisSIsMember(args [][]byte) respValue {
+func (db *database) redisSIsMember(args [][]byte) respValue {
 	if len(args) != 3 {
 		return redisSyntaxError()
 	}
@@ -1007,7 +1008,7 @@ func (db *DB) redisSIsMember(args [][]byte) respValue {
 	if typ != redisTypeSet {
 		return redisErrorReply(fmt.Errorf("%w: %s", errRedisWrongType, typ))
 	}
-	_, found, err := db.engine.Get(context.Background(), namespacedKey(kindSet, string(args[1]), string(args[2])))
+	_, found, err := db.engine.Get(context.Background(), db.store.SetKey(string(args[1]), string(args[2])))
 	if err != nil {
 		return redisErrorReply(err)
 	}
@@ -1017,7 +1018,7 @@ func (db *DB) redisSIsMember(args [][]byte) respValue {
 	return respIntegerValue(0)
 }
 
-func (db *DB) redisSMIsMember(args [][]byte) respValue {
+func (db *database) redisSMIsMember(args [][]byte) respValue {
 	if len(args) < 3 {
 		return redisSyntaxError()
 	}
@@ -1032,7 +1033,7 @@ func (db *DB) redisSMIsMember(args [][]byte) respValue {
 	return respArrayValues(items...)
 }
 
-func (db *DB) redisSMembers(args [][]byte) respValue {
+func (db *database) redisSMembers(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -1047,7 +1048,7 @@ func (db *DB) redisSMembers(args [][]byte) respValue {
 	return respArrayValues(items...)
 }
 
-func (db *DB) redisSCard(args [][]byte) respValue {
+func (db *database) redisSCard(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -1058,7 +1059,7 @@ func (db *DB) redisSCard(args [][]byte) respValue {
 	return respIntegerValue(int64(len(members)))
 }
 
-func (db *DB) redisListValues(ctx context.Context, key string) ([][]byte, bool, error) {
+func (db *database) redisListValues(ctx context.Context, key string) ([][]byte, bool, error) {
 	items, found, err := db.redisList(ctx, key)
 	if err != nil || !found {
 		return nil, found, err
@@ -1066,7 +1067,7 @@ func (db *DB) redisListValues(ctx context.Context, key string) ([][]byte, bool, 
 	live := make([][]byte, 0, len(items))
 	changed := false
 	for _, item := range items {
-		_, ok, err := redisItemPayload(item, db.cfg.now())
+		_, ok, err := db.redisItemPayload(item, db.cfg.now())
 		if err != nil {
 			return nil, false, err
 		}
@@ -1087,10 +1088,10 @@ func (db *DB) redisListValues(ctx context.Context, key string) ([][]byte, bool, 
 	return live, true, nil
 }
 
-func redisListReply(items [][]byte, now time.Time) (respValue, error) {
+func (db *database) redisListReply(items [][]byte, now time.Time) (respValue, error) {
 	replies := make([]respValue, 0, len(items))
 	for _, item := range items {
-		payload, found, err := redisItemPayload(item, now)
+		payload, found, err := db.redisItemPayload(item, now)
 		if err != nil {
 			return respValue{}, err
 		}
@@ -1101,21 +1102,37 @@ func redisListReply(items [][]byte, now time.Time) (respValue, error) {
 	return respArrayValues(replies...), nil
 }
 
-func (db *DB) redisPush(args [][]byte, left bool) respValue {
+func normalizeRange(length, start, stop int) (int, int, bool) {
+	if start < 0 {
+		start = length + start
+	}
+	if stop < 0 {
+		stop = length + stop
+	}
+	if start < 0 {
+		start = 0
+	}
+	if stop >= length {
+		stop = length - 1
+	}
+	return start, stop, length > 0 && start < length && stop >= start
+}
+
+func (db *database) redisPush(args [][]byte, left bool) respValue {
 	if len(args) < 3 {
 		return redisSyntaxError()
 	}
 	return db.redisPushValues(string(args[1]), args[2:], left, false)
 }
 
-func (db *DB) redisPushX(args [][]byte, left bool) respValue {
+func (db *database) redisPushX(args [][]byte, left bool) respValue {
 	if len(args) < 3 {
 		return redisSyntaxError()
 	}
 	return db.redisPushValues(string(args[1]), args[2:], left, true)
 }
 
-func (db *DB) redisPushValues(key string, values [][]byte, left, onlyIfExists bool) respValue {
+func (db *database) redisPushValues(key string, values [][]byte, left, onlyIfExists bool) respValue {
 	typ, err := db.redisType(context.Background(), key)
 	if err != nil {
 		return redisErrorReply(err)
@@ -1135,7 +1152,7 @@ func (db *DB) redisPushValues(key string, values [][]byte, left, onlyIfExists bo
 	}
 	encoded := make([][]byte, 0, len(values))
 	for _, value := range values {
-		item, err := marshalEnvelope(BytesCodec{}.Name(), value, 0)
+		item, err := db.encodeRecord(bytesCodec, value, 0)
 		if err != nil {
 			return redisErrorReply(err)
 		}
@@ -1154,12 +1171,12 @@ func (db *DB) redisPushValues(key string, values [][]byte, left, onlyIfExists bo
 		return redisErrorReply(err)
 	}
 	if !found {
-		_ = db.engine.Delete(context.Background(), redisTTLKey(key))
+		_ = db.engine.Delete(context.Background(), db.store.CollectionTTLKey(key))
 	}
 	return respIntegerValue(int64(len(items)))
 }
 
-func (db *DB) redisLRange(args [][]byte) respValue {
+func (db *database) redisLRange(args [][]byte) respValue {
 	if len(args) != 4 {
 		return redisSyntaxError()
 	}
@@ -1179,14 +1196,14 @@ func (db *DB) redisLRange(args [][]byte) respValue {
 	if !ok {
 		return respArrayValues()
 	}
-	reply, err := redisListReply(items[first:last+1], db.cfg.now())
+	reply, err := db.redisListReply(items[first:last+1], db.cfg.now())
 	if err != nil {
 		return redisErrorReply(err)
 	}
 	return reply
 }
 
-func (db *DB) redisLLen(args [][]byte) respValue {
+func (db *database) redisLLen(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -1197,7 +1214,7 @@ func (db *DB) redisLLen(args [][]byte) respValue {
 	return respIntegerValue(int64(len(items)))
 }
 
-func (db *DB) redisPop(args [][]byte, left bool) respValue {
+func (db *database) redisPop(args [][]byte, left bool) respValue {
 	if len(args) != 2 && len(args) != 3 {
 		return redisSyntaxError()
 	}
@@ -1238,13 +1255,13 @@ func (db *DB) redisPop(args [][]byte, left bool) respValue {
 		return redisErrorReply(err)
 	}
 	if len(args) == 3 {
-		reply, err := redisListReply(removed, db.cfg.now())
+		reply, err := db.redisListReply(removed, db.cfg.now())
 		if err != nil {
 			return redisErrorReply(err)
 		}
 		return reply
 	}
-	payload, ok, err := redisItemPayload(removed[0], db.cfg.now())
+	payload, ok, err := db.redisItemPayload(removed[0], db.cfg.now())
 	if err != nil {
 		return redisErrorReply(err)
 	}
@@ -1254,7 +1271,7 @@ func (db *DB) redisPop(args [][]byte, left bool) respValue {
 	return respBulkBytes(payload)
 }
 
-func (db *DB) redisLTrim(args [][]byte) respValue {
+func (db *database) redisLTrim(args [][]byte) respValue {
 	if len(args) != 4 {
 		return redisSyntaxError()
 	}
@@ -1284,28 +1301,7 @@ func (db *DB) redisLTrim(args [][]byte) respValue {
 	return respSimpleString("OK")
 }
 
-func redisLogicalKeyFromStorage(storageKey []byte) (string, bool) {
-	if len(storageKey) == 0 {
-		return "", false
-	}
-	switch storageKey[0] {
-	case kindValue, kindList, kindRedisTTL:
-		return string(storageKey[1:]), true
-	case kindHash, kindSet:
-		if len(storageKey) < 5 {
-			return "", false
-		}
-		length := int(binary.BigEndian.Uint32(storageKey[1:5]))
-		if len(storageKey) < 5+length {
-			return "", false
-		}
-		return string(storageKey[5 : 5+length]), true
-	default:
-		return "", false
-	}
-}
-
-func (db *DB) redisLogicalKeys(ctx context.Context) ([]string, error) {
+func (db *database) redisLogicalKeys(ctx context.Context) ([]string, error) {
 	var storageKeys [][]byte
 	if err := db.engine.ScanPrefix(ctx, nil, func(storageKey, _ []byte) error {
 		storageKeys = append(storageKeys, append([]byte(nil), storageKey...))
@@ -1315,7 +1311,7 @@ func (db *DB) redisLogicalKeys(ctx context.Context) ([]string, error) {
 	}
 	candidates := make(map[string]struct{}, len(storageKeys))
 	for _, storageKey := range storageKeys {
-		if key, ok := redisLogicalKeyFromStorage(storageKey); ok {
+		if key, ok := db.store.LogicalKey(storageKey); ok {
 			candidates[key] = struct{}{}
 		}
 	}
@@ -1338,7 +1334,7 @@ func redisPatternMatch(pattern, value string) bool {
 	return err == nil && matched
 }
 
-func (db *DB) redisKeysCommand(args [][]byte) respValue {
+func (db *database) redisKeysCommand(args [][]byte) respValue {
 	if len(args) != 2 {
 		return redisSyntaxError()
 	}
@@ -1356,7 +1352,7 @@ func (db *DB) redisKeysCommand(args [][]byte) respValue {
 	return respArrayValues(items...)
 }
 
-func (db *DB) redisScan(args [][]byte) respValue {
+func (db *database) redisScan(args [][]byte) respValue {
 	if len(args) < 2 {
 		return redisSyntaxError()
 	}
@@ -1424,7 +1420,7 @@ func (db *DB) redisScan(args [][]byte) respValue {
 	return respArrayValues(respBulkString(strconv.FormatInt(next, 10)), respArrayValues(items...))
 }
 
-func (db *DB) redisDBSize(args [][]byte) respValue {
+func (db *database) redisDBSize(args [][]byte) respValue {
 	if len(args) != 1 {
 		return redisSyntaxError()
 	}
@@ -1435,7 +1431,7 @@ func (db *DB) redisDBSize(args [][]byte) respValue {
 	return respIntegerValue(int64(len(keys)))
 }
 
-func (db *DB) redisFlush(args [][]byte) respValue {
+func (db *database) redisFlush(args [][]byte) respValue {
 	if len(args) > 2 {
 		return redisSyntaxError()
 	}

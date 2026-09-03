@@ -6,6 +6,10 @@ This distribution project publishes the embedded `libkvlite` ABI built from
 release. It is deliberately separate from Go's generated cgo header so status
 codes and allocator ownership remain documented and stable.
 
+This artifact is embedded-only: it neither links nor starts KVLite's optional
+HTTP or Redis servers. Deploy the separately installed CLI or the matching Go
+extension when a database needs a remote API.
+
 Build only this artifact on the current native platform:
 
 ```bash

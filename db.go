@@ -15,13 +15,12 @@ type DB struct {
 	backend Backend
 
 	mu sync.RWMutex
-	// redisMu serializes multi-step Redis commands (for example HSET and
-	// LPUSH) so each command observes one coherent view of the database.
-	redisMu      sync.Mutex
+	// protocolMu serializes multi-step optional protocol commands (for example
+	// a multi-record hash or list update) and generic scalar replacement, so
+	// each logical key observes one coherent representation.
+	protocolMu   sync.Mutex
 	collectionMu sync.Mutex
 	closed       bool
-	server       *shareServer
-	redis        *redisServer
 }
 
 // Open opens or creates a KVLite database using an installed storage driver.
@@ -42,6 +41,26 @@ func Open(path string, options ...Option) (*DB, error) {
 	return newDB(storage, cfg, backend)
 }
 
+// OpenWithEngine creates an embedded KVLite handle over an Engine supplied by
+// the caller. It is intended for optional transport extensions and custom
+// in-process adapters. Unlike Open, it does not choose a storage driver or
+// create a driver manifest; the returned DB takes ownership of and closes the
+// supplied Engine.
+func OpenWithEngine(storage Engine, backend Backend, options ...Option) (*DB, error) {
+	if storage == nil {
+		return nil, fmt.Errorf("%w: storage engine is required", ErrInvalidArgument)
+	}
+	canonicalBackend, err := ParseDriverName(string(backend))
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := buildConfig(options)
+	if err != nil {
+		return nil, err
+	}
+	return newDB(storage, cfg, Backend(canonicalBackend))
+}
+
 func buildConfig(options []Option) (config, error) {
 	cfg := defaultConfig()
 	for _, option := range options {
@@ -56,27 +75,7 @@ func buildConfig(options []Option) (config, error) {
 }
 
 func newDB(storage Engine, cfg config, backend Backend) (*DB, error) {
-	db := &DB{engine: &guardedEngine{inner: storage}, cfg: cfg, backend: backend}
-	if cfg.sharing != nil {
-		server, err := startShareServer(db, *cfg.sharing)
-		if err != nil {
-			_ = db.engine.Close()
-			return nil, err
-		}
-		db.server = server
-	}
-	if cfg.redis != nil {
-		redis, err := startRedisServer(db, *cfg.redis)
-		if err != nil {
-			if db.server != nil {
-				_ = db.server.close()
-			}
-			_ = db.engine.Close()
-			return nil, err
-		}
-		db.redis = redis
-	}
-	return db, nil
+	return &DB{engine: &guardedEngine{inner: storage}, cfg: cfg, backend: backend}, nil
 }
 
 func (db *DB) ensureOpen() error {
@@ -93,11 +92,14 @@ func (db *DB) Put(ctx context.Context, key string, value any, options ...PutOpti
 	if key == "" {
 		return fmt.Errorf("%w: key is required", ErrInvalidArgument)
 	}
-	db.redisMu.Lock()
-	defer db.redisMu.Unlock()
-	// A logical key has one Redis-compatible type. Remove any collection
-	// records before writing a scalar value through the generic API.
-	if _, err := db.redisDeleteRaw(ctx, key); err != nil {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	db.protocolMu.Lock()
+	defer db.protocolMu.Unlock()
+	// A logical key has one representation. Remove any collection records
+	// before writing a scalar value through the generic embedded API.
+	if _, err := db.deleteLogicalKey(ctx, key); err != nil {
 		return fmt.Errorf("kvlite: put: %w", err)
 	}
 	return db.put(ctx, valueKey(key), value, options...)
@@ -106,15 +108,34 @@ func (db *DB) Put(ctx context.Context, key string, value any, options ...PutOpti
 // PutBytes stores an already-serialized payload without JSON re-encoding it.
 // GetBytes returns this payload exactly as written, regardless of its format.
 func (db *DB) PutBytes(ctx context.Context, key string, value []byte, options ...PutOption) error {
+	return db.PutStoredValue(ctx, key, BytesCodec{}.Name(), value, options...)
+}
+
+// StoredValue is the serialized form of one live logical KVLite value. It is
+// primarily useful to optional protocol extensions. ExpiresAt is a Unix-nano
+// timestamp, or zero when the value has no expiry.
+type StoredValue struct {
+	Codec     string
+	Payload   []byte
+	ExpiresAt int64
+}
+
+// PutStoredValue stores a payload with an explicit codec name. Normal
+// applications should prefer Put or PutBytes; this lower-level method lets a
+// protocol extension preserve a negotiated serialized representation.
+func (db *DB) PutStoredValue(ctx context.Context, key, codec string, value []byte, options ...PutOption) error {
 	if key == "" {
 		return fmt.Errorf("%w: key is required", ErrInvalidArgument)
+	}
+	if codec == "" {
+		return fmt.Errorf("%w: codec is required", ErrInvalidArgument)
 	}
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
-	db.redisMu.Lock()
-	defer db.redisMu.Unlock()
-	if _, err := db.redisDeleteRaw(ctx, key); err != nil {
+	db.protocolMu.Lock()
+	defer db.protocolMu.Unlock()
+	if _, err := db.deleteLogicalKey(ctx, key); err != nil {
 		return fmt.Errorf("kvlite: put: %w", err)
 	}
 	cfg := putConfig{}
@@ -125,7 +146,7 @@ func (db *DB) PutBytes(ctx context.Context, key string, value []byte, options ..
 			}
 		}
 	}
-	return db.putPayload(ctx, valueKey(key), BytesCodec{}.Name(), value, cfg.ttl)
+	return db.putPayload(ctx, valueKey(key), codec, value, cfg.ttl)
 }
 
 func (db *DB) put(ctx context.Context, key []byte, value any, options ...PutOption) error {
@@ -186,29 +207,44 @@ func (db *DB) Get(ctx context.Context, key string, target any) error {
 
 // GetBytes returns the serialized payload for a live value.
 func (db *DB) GetBytes(ctx context.Context, key string) ([]byte, error) {
+	value, err := db.GetStoredValue(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return value.Payload, nil
+}
+
+// GetStoredValue returns the serialized payload and codec metadata for a live
+// logical value. Expired values are removed lazily just as they are through
+// Get and GetBytes.
+func (db *DB) GetStoredValue(ctx context.Context, key string) (StoredValue, error) {
 	if key == "" {
-		return nil, fmt.Errorf("%w: key is required", ErrInvalidArgument)
+		return StoredValue{}, fmt.Errorf("%w: key is required", ErrInvalidArgument)
 	}
 	if err := db.ensureOpen(); err != nil {
-		return nil, err
+		return StoredValue{}, err
 	}
 	storageKey := valueKey(key)
 	data, found, err := db.engine.Get(ctx, storageKey)
 	if err != nil {
-		return nil, fmt.Errorf("kvlite: get: %w", err)
+		return StoredValue{}, fmt.Errorf("kvlite: get: %w", err)
 	}
 	if !found {
-		return nil, ErrNotFound
+		return StoredValue{}, ErrNotFound
 	}
 	value, err := unmarshalEnvelope(data)
 	if err != nil {
-		return nil, err
+		return StoredValue{}, err
 	}
 	if value.expiresAt > 0 && db.cfg.now().UnixNano() >= value.expiresAt {
 		_ = db.engine.Delete(ctx, storageKey)
-		return nil, ErrNotFound
+		return StoredValue{}, ErrNotFound
 	}
-	return append([]byte(nil), value.payload...), nil
+	return StoredValue{
+		Codec:     value.codec,
+		Payload:   append([]byte(nil), value.payload...),
+		ExpiresAt: value.expiresAt,
+	}, nil
 }
 
 func (db *DB) get(ctx context.Context, key []byte, target any) error {
@@ -283,34 +319,12 @@ func (db *DB) Delete(ctx context.Context, key string) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
-	db.redisMu.Lock()
-	defer db.redisMu.Unlock()
-	if _, err := db.redisDeleteRaw(ctx, key); err != nil {
+	db.protocolMu.Lock()
+	defer db.protocolMu.Unlock()
+	if _, err := db.deleteLogicalKey(ctx, key); err != nil {
 		return fmt.Errorf("kvlite: delete: %w", err)
 	}
 	return nil
-}
-
-// SharingAddress returns the bound HTTP address, or an empty string when the
-// sharing layer is disabled.
-func (db *DB) SharingAddress() string {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	if db.server == nil {
-		return ""
-	}
-	return db.server.address()
-}
-
-// RedisAddress returns the bound Redis RESP address, or an empty string when
-// the Redis compatibility endpoint is disabled.
-func (db *DB) RedisAddress() string {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	if db.redis == nil {
-		return ""
-	}
-	return db.redis.address()
 }
 
 // Backend reports the selected storage driver. A remote DB without an explicit
@@ -322,8 +336,9 @@ func (db *DB) Backend() Backend {
 	return db.backend
 }
 
-// Close stops sharing and closes the selected storage backend. It is safe to
-// call more than once.
+// Close closes the selected embedded storage backend. Optional protocol
+// extension servers are independently owned and must be closed by the caller.
+// It is safe to call more than once.
 func (db *DB) Close() error {
 	db.mu.Lock()
 	if db.closed {
@@ -331,17 +346,6 @@ func (db *DB) Close() error {
 		return nil
 	}
 	db.closed = true
-	server := db.server
-	db.server = nil
-	redis := db.redis
-	db.redis = nil
 	db.mu.Unlock()
-
-	if server != nil {
-		_ = server.close()
-	}
-	if redis != nil {
-		_ = redis.close()
-	}
 	return db.engine.Close()
 }

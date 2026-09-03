@@ -19,8 +19,6 @@ type config struct {
 	writeBufferSize   int
 	maxWriteBuffers   int
 	maxBackgroundJobs int
-	sharing           *SharingOptions
-	redis             *RedisOptions
 	now               func() time.Time
 }
 
@@ -101,32 +99,6 @@ func WithMemoryBudget(bytes int) Option {
 		cfg.blockCacheSize = bytes / 2
 		cfg.writeBufferSize = bytes / 8
 		cfg.maxWriteBuffers = 2
-		return nil
-	}
-}
-
-// WithSharing starts an HTTP endpoint owned by the process that opens the DB.
-func WithSharing(options SharingOptions) Option {
-	return func(cfg *config) error {
-		if options.ListenAddress == "" {
-			options.ListenAddress = "127.0.0.1:0"
-		}
-		cfg.sharing = &options
-		return nil
-	}
-}
-
-// WithRedis starts a Redis RESP2-compatible endpoint owned by the process
-// that opens the database. An empty ListenAddress uses 127.0.0.1:6379.
-func WithRedis(options RedisOptions) Option {
-	return func(cfg *config) error {
-		if options.ListenAddress == "" {
-			options.ListenAddress = "127.0.0.1:6379"
-		}
-		if options.MaxClients < 0 {
-			return fmt.Errorf("%w: max clients cannot be negative", ErrInvalidArgument)
-		}
-		cfg.redis = &options
 		return nil
 	}
 }

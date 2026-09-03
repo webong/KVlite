@@ -10,6 +10,8 @@ control.
 | [`cli/`](cli/) | The `kvlite` owner/server binary contract | `cmd/kvlite` |
 | [`c-shared/`](c-shared/) | The `libkvlite` embedded FFI contract | `capi` |
 | [`bindings/`](bindings/) | PHP, Python, Node.js, and Rust language packages | HTTP, Redis, or C ABI |
+| [`../extensions/http/`](../extensions/http/) | Optional Go HTTP server/client module | `extensions/http` |
+| [`../extensions/redis/`](../extensions/redis/) | Optional Redis-compatible server module | `extensions/redis` |
 | [`manifest.json`](manifest.json) | Public artifact names and supported target inventory | `scripts/build-release.sh` |
 
 Run `make release RELEASE_VERSION=v0.1.0 DRIVER=leveldb` (or `DRIVER=rocksdb`)
@@ -33,3 +35,7 @@ relocate RocksDB and compression-library dependencies. LevelDB's bundle links
 only the pure-Go LevelDB driver. Before publishing a self-contained installer,
 the packaging layer must bundle RocksDB's native dependencies, set each
 platform's loader paths, and include their license notices.
+
+The C shared-library artifact is intentionally embedded-only. The separately
+installed HTTP and Redis extensions are linked by the CLI artifact when a
+process needs to own a remote API.

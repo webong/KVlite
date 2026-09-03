@@ -1,15 +1,98 @@
-package kvlite
+package kvliteredis
 
 import (
 	"bufio"
 	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"net"
+	"sort"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/webong/kvlite"
 )
+
+type redisTestEngine struct {
+	mu     sync.RWMutex
+	values map[string][]byte
+}
+
+func newRedisTestEngine() *redisTestEngine {
+	return &redisTestEngine{values: make(map[string][]byte)}
+}
+
+func (engine *redisTestEngine) Get(ctx context.Context, key []byte) ([]byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	engine.mu.RLock()
+	defer engine.mu.RUnlock()
+	value, found := engine.values[string(key)]
+	return append([]byte(nil), value...), found, nil
+}
+
+func (engine *redisTestEngine) Put(ctx context.Context, key, value []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	engine.values[string(key)] = append([]byte(nil), value...)
+	return nil
+}
+
+func (engine *redisTestEngine) Delete(ctx context.Context, key []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	delete(engine.values, string(key))
+	return nil
+}
+
+func (engine *redisTestEngine) ScanPrefix(ctx context.Context, prefix []byte, callback func(key, value []byte) error) error {
+	engine.mu.RLock()
+	keys := make([]string, 0, len(engine.values))
+	for key := range engine.values {
+		if bytes.HasPrefix([]byte(key), prefix) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	items := make([][2][]byte, 0, len(keys))
+	for _, key := range keys {
+		items = append(items, [2][]byte{[]byte(key), append([]byte(nil), engine.values[key]...)})
+	}
+	engine.mu.RUnlock()
+	for _, item := range items {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := callback(item[0], item[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (engine *redisTestEngine) Close() error { return nil }
+
+func openRedisTestServer(t *testing.T, options Options) (*kvlite.DB, *Server) {
+	t.Helper()
+	db, err := kvlite.OpenWithEngine(newRedisTestEngine(), kvlite.BackendRocksDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	server, err := Serve(db, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	return db, server
+}
 
 type redisTestClient struct {
 	conn   net.Conn
@@ -69,11 +152,11 @@ func assertRedisInteger(t *testing.T, reply respValue, want int64) {
 }
 
 func TestRedisRESPCompatibility(t *testing.T) {
-	db, _ := testDB(t, WithRedis(RedisOptions{
+	_, server := openRedisTestServer(t, Options{
 		ListenAddress: "127.0.0.1:0",
 		Password:      "secret",
-	}))
-	client := newRedisTestClient(t, db.RedisAddress()[len("redis://"):])
+	})
+	client := newRedisTestClient(t, server.URL()[len("redis://"):])
 	if reply := client.do(t, "PING"); reply.kind != respError || string(reply.data) != "NOAUTH Authentication required." {
 		t.Fatalf("unauthenticated PING = %#v", reply)
 	}
@@ -122,32 +205,32 @@ func TestRedisRESPCompatibility(t *testing.T) {
 }
 
 func TestRedisTTLAndCollectionsExpire(t *testing.T) {
-	now := time.Date(2026, 8, 28, 10, 0, 0, 0, time.UTC)
-	db, _ := testDB(t,
-		func(cfg *config) error {
-			cfg.now = func() time.Time { return now }
-			return nil
-		},
-		WithRedis(RedisOptions{ListenAddress: "127.0.0.1:0"}),
-	)
-	client := newRedisTestClient(t, db.RedisAddress()[len("redis://"):])
+	db, server := openRedisTestServer(t, Options{ListenAddress: "127.0.0.1:0"})
+	client := newRedisTestClient(t, server.URL()[len("redis://"):])
 	assertRedisSimple(t, client.do(t, "SET", "ephemeral", "value"), "OK")
-	assertRedisInteger(t, client.do(t, "EXPIRE", "ephemeral", "10"), 1)
-	assertRedisInteger(t, client.do(t, "TTL", "ephemeral"), 10)
-	now = now.Add(11 * time.Second)
+	assertRedisInteger(t, client.do(t, "PEXPIRE", "ephemeral", "30"), 1)
+	time.Sleep(60 * time.Millisecond)
 	if reply := client.do(t, "GET", "ephemeral"); reply.kind != respBulk || !reply.null {
 		t.Fatalf("expired GET = %#v", reply)
 	}
 	assertRedisInteger(t, client.do(t, "TTL", "ephemeral"), -2)
 	assertRedisInteger(t, client.do(t, "SADD", "short", "member"), 1)
-	assertRedisInteger(t, client.do(t, "EXPIRE", "short", "1"), 1)
-	now = now.Add(2 * time.Second)
+	assertRedisInteger(t, client.do(t, "PEXPIRE", "short", "30"), 1)
+	time.Sleep(60 * time.Millisecond)
 	if reply := client.do(t, "SCARD", "short"); reply.kind != respInteger || reply.value != 0 {
 		t.Fatalf("expired set SCARD = %#v", reply)
 	}
-	if exists, err := db.Has(context.Background(), "ephemeral"); err != nil && !errors.Is(err, ErrNotFound) {
-		t.Fatal(fmt.Errorf("Has expired key: %w", err))
-	} else if exists {
-		t.Fatal("expired key still exists")
+	if exists, err := db.Has(context.Background(), "ephemeral"); err != nil || exists {
+		t.Fatalf("Has expired key = %t, %v", exists, err)
+	}
+}
+
+func TestClosingServerLeavesEmbeddedOwnerOpen(t *testing.T) {
+	db, server := openRedisTestServer(t, Options{ListenAddress: "127.0.0.1:0"})
+	if err := server.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(context.Background(), "embedded", "still-open"); err != nil {
+		t.Fatalf("owner Put() after Server.Close() = %v", err)
 	}
 }

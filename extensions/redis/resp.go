@@ -1,4 +1,4 @@
-package kvlite
+package kvliteredis
 
 import (
 	"bufio"

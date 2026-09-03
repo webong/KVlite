@@ -1,10 +1,13 @@
-package kvlite
+// Package kvlitehttp adds KVLite's optional JSON/HTTP server and Go remote
+// client. Importing the embeddable kvlite core alone never starts a listener.
+package kvlitehttp
 
 import (
 	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,24 +19,30 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/webong/kvlite"
 )
 
 const defaultMaxRequestBytes int64 = 64 << 20
 
 const driverHeader = "X-KVLite-Driver"
 
-// SharingOptions configures the optional local HTTP transport. DriverPaths
-// exposes additional server-owned directories under their selected drivers.
-// A remote client may choose one of these names with X-KVLite-Driver, but it
-// never supplies a filesystem path.
-type SharingOptions struct {
+// Options configures the optional local HTTP transport. DriverPaths exposes
+// additional server-owned directories under their selected drivers. RedisURL
+// advertises an independently started Redis extension for the primary
+// database only. A remote client may choose one of the mapped driver names
+// with X-KVLite-Driver, but it never supplies a filesystem path.
+type Options struct {
 	ListenAddress   string
 	BearerToken     string
 	MaxRequestBytes int64
-	DriverPaths     map[DriverName]string
+	DriverPaths     map[kvlite.DriverName]string
+	RedisURL        string
 }
 
-type shareServer struct {
+// Server owns an optional HTTP listener and any additional server-owned
+// driver/path mappings. Closing a Server does not close its primary DB.
+type Server struct {
 	listener  net.Listener
 	server    *http.Server
 	databases *sharedDatabases
@@ -45,15 +54,15 @@ type scanItem struct {
 }
 
 type sharedDatabases struct {
-	defaultDriver DriverName
-	databases     map[DriverName]*DB
-	auxiliary     []*DB
+	defaultDriver kvlite.DriverName
+	databases     map[kvlite.DriverName]*kvlite.DB
+	auxiliary     []*kvlite.DB
 }
 
 type driverRouteError struct {
 	code      string
-	driver    DriverName
-	available []DriverName
+	driver    kvlite.DriverName
+	available []kvlite.DriverName
 	err       error
 }
 
@@ -66,40 +75,29 @@ func (err *driverRouteError) Error() string {
 
 func (err *driverRouteError) Unwrap() error { return err.err }
 
-func newSharedDatabases(primary *DB, options SharingOptions) (*sharedDatabases, error) {
-	primaryDriver := DriverName(primary.Backend())
+func newSharedDatabases(primary *kvlite.DB, options Options) (*sharedDatabases, error) {
+	primaryDriver := kvlite.DriverName(primary.Backend())
 	result := &sharedDatabases{
 		defaultDriver: primaryDriver,
-		databases:     map[DriverName]*DB{primaryDriver: primary},
+		databases:     map[kvlite.DriverName]*kvlite.DB{primaryDriver: primary},
 	}
 	for requestedDriver, path := range options.DriverPaths {
-		driver, err := normalizeDriverName(requestedDriver)
+		driver, err := kvlite.ParseDriverName(string(requestedDriver))
 		if err != nil {
 			result.closeAuxiliary()
 			return nil, err
 		}
 		if path == "" {
 			result.closeAuxiliary()
-			return nil, fmt.Errorf("%w: a path is required for shared driver %q", ErrInvalidArgument, driver)
+			return nil, fmt.Errorf("%w: a path is required for shared driver %q", kvlite.ErrInvalidArgument, driver)
 		}
 		if _, exists := result.databases[driver]; exists {
 			result.closeAuxiliary()
-			return nil, fmt.Errorf("%w: shared driver %q is already mapped", ErrInvalidArgument, driver)
+			return nil, fmt.Errorf("%w: shared driver %q is already mapped", kvlite.ErrInvalidArgument, driver)
 		}
 
-		cfg := primary.cfg
-		cfg.driver = driver
-		cfg.driverExplicit = true
-		cfg.sharing = nil
-		cfg.redis = nil
-		storage, backend, err := openConfiguredEngine(path, cfg)
+		auxiliary, err := kvlite.Open(path, kvlite.WithDriver(string(driver)))
 		if err != nil {
-			result.closeAuxiliary()
-			return nil, err
-		}
-		auxiliary, err := newDB(storage, cfg, backend)
-		if err != nil {
-			_ = storage.Close()
 			result.closeAuxiliary()
 			return nil, err
 		}
@@ -120,8 +118,8 @@ func (databases *sharedDatabases) closeAuxiliary() error {
 	return closeErr
 }
 
-func (databases *sharedDatabases) driverNames() []DriverName {
-	names := make([]DriverName, 0, len(databases.databases))
+func (databases *sharedDatabases) driverNames() []kvlite.DriverName {
+	names := make([]kvlite.DriverName, 0, len(databases.databases))
 	for name := range databases.databases {
 		names = append(names, name)
 	}
@@ -129,11 +127,11 @@ func (databases *sharedDatabases) driverNames() []DriverName {
 	return names
 }
 
-func (databases *sharedDatabases) driverInfos() []DriverInfo {
+func (databases *sharedDatabases) driverInfos() []kvlite.DriverInfo {
 	names := databases.driverNames()
-	infos := make([]DriverInfo, 0, len(names))
+	infos := make([]kvlite.DriverInfo, 0, len(names))
 	for _, name := range names {
-		info, err := DriverInfoFor(name)
+		info, err := kvlite.DriverInfoFor(name)
 		if err != nil {
 			continue
 		}
@@ -142,13 +140,20 @@ func (databases *sharedDatabases) driverInfos() []DriverInfo {
 	return infos
 }
 
-func (databases *sharedDatabases) resolve(request *http.Request) (*DB, DriverName, error) {
+func (databases *sharedDatabases) redisURL(database *kvlite.DB, configuredURL string) string {
+	if kvlite.DriverName(database.Backend()) != databases.defaultDriver {
+		return ""
+	}
+	return configuredURL
+}
+
+func (databases *sharedDatabases) resolve(request *http.Request) (*kvlite.DB, kvlite.DriverName, error) {
 	raw := request.Header.Get(driverHeader)
 	driver := databases.defaultDriver
 	if raw != "" {
-		canonical, err := normalizeDriverName(DriverName(raw))
+		canonical, err := kvlite.ParseDriverName(raw)
 		if err != nil {
-			return nil, "", &driverRouteError{code: "invalid_driver", driver: DriverName(raw), available: databases.driverNames(), err: err}
+			return nil, "", &driverRouteError{code: "invalid_driver", driver: kvlite.DriverName(raw), available: databases.driverNames(), err: err}
 		}
 		driver = canonical
 	}
@@ -156,30 +161,30 @@ func (databases *sharedDatabases) resolve(request *http.Request) (*DB, DriverNam
 	if found {
 		return database, driver, nil
 	}
-	_, registered, err := registeredDriverFor(driver)
-	if errors.Is(err, ErrDriverNotInstalled) {
+	info, err := kvlite.DriverInfoFor(driver)
+	if errors.Is(err, kvlite.ErrDriverNotInstalled) {
 		return nil, driver, &driverRouteError{code: "driver_not_installed", driver: driver, available: databases.driverNames(), err: err}
 	}
 	if err != nil {
 		return nil, driver, &driverRouteError{code: "invalid_driver", driver: driver, available: databases.driverNames(), err: err}
 	}
-	if availabilityErr := registered.driver.Available(); availabilityErr != nil {
+	if !info.Available {
 		return nil, driver, &driverRouteError{
 			code:      "driver_unavailable",
 			driver:    driver,
 			available: databases.driverNames(),
-			err:       fmt.Errorf("%w: driver %q cannot run in this server: %v", ErrDriverUnavailable, driver, availabilityErr),
+			err:       fmt.Errorf("%w: driver %q cannot run in this server", kvlite.ErrDriverUnavailable, driver),
 		}
 	}
 	return nil, driver, &driverRouteError{
 		code:      "driver_not_exposed",
 		driver:    driver,
 		available: databases.driverNames(),
-		err:       fmt.Errorf("%w: driver %q is installed but this server has no mapped database for it", ErrDriverNotExposed, driver),
+		err:       fmt.Errorf("%w: driver %q is installed but this server has no mapped database for it", kvlite.ErrDriverNotExposed, driver),
 	}
 }
 
-func resolveSharedDatabase(databases *sharedDatabases, w http.ResponseWriter, request *http.Request) (*DB, bool) {
+func resolveSharedDatabase(databases *sharedDatabases, w http.ResponseWriter, request *http.Request) (*kvlite.DB, bool) {
 	database, driver, err := databases.resolve(request)
 	if err != nil {
 		writeDriverRouteError(w, err)
@@ -193,10 +198,10 @@ func writeDriverRouteError(w http.ResponseWriter, err error) {
 	status := http.StatusConflict
 	payload := struct {
 		Error struct {
-			Code             string       `json:"code"`
-			Driver           DriverName   `json:"driver,omitempty"`
-			AvailableDrivers []DriverName `json:"available_drivers,omitempty"`
-			Message          string       `json:"message"`
+			Code             string              `json:"code"`
+			Driver           kvlite.DriverName   `json:"driver,omitempty"`
+			AvailableDrivers []kvlite.DriverName `json:"available_drivers,omitempty"`
+			Message          string              `json:"message"`
 		} `json:"error"`
 	}{}
 	payload.Error.Code = "driver_unavailable"
@@ -217,7 +222,18 @@ func writeDriverRouteError(w http.ResponseWriter, err error) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func startShareServer(db *DB, options SharingOptions) (*shareServer, error) {
+// Serve starts an explicit KVLite HTTP server. The supplied DB remains owned
+// by the caller and is not closed when Server.Close is called.
+func Serve(db *kvlite.DB, options Options) (*Server, error) {
+	if db == nil {
+		return nil, fmt.Errorf("%w: database is required", kvlite.ErrInvalidArgument)
+	}
+	if db.Backend() == kvlite.BackendRemote {
+		return nil, fmt.Errorf("%w: a remote database cannot own an HTTP server", kvlite.ErrInvalidArgument)
+	}
+	if options.ListenAddress == "" {
+		options.ListenAddress = "127.0.0.1:0"
+	}
 	databases, err := newSharedDatabases(db, options)
 	if err != nil {
 		return nil, err
@@ -238,7 +254,7 @@ func startShareServer(db *DB, options SharingOptions) (*shareServer, error) {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	result := &shareServer{listener: listener, server: server, databases: databases}
+	result := &Server{listener: listener, server: server, databases: databases}
 	mux.HandleFunc("GET /v1", func(w http.ResponseWriter, request *http.Request) {
 		database, ok := resolveSharedDatabase(databases, w, request)
 		if !ok {
@@ -246,21 +262,21 @@ func startShareServer(db *DB, options SharingOptions) (*shareServer, error) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
-			Protocol string       `json:"protocol"`
-			Entries  string       `json:"entries"`
-			Methods  []string     `json:"methods"`
-			Driver   DriverName   `json:"driver"`
-			Backend  Backend      `json:"backend"`
-			Drivers  []DriverInfo `json:"drivers"`
-			Redis    string       `json:"redis,omitempty"`
+			Protocol string              `json:"protocol"`
+			Entries  string              `json:"entries"`
+			Methods  []string            `json:"methods"`
+			Driver   kvlite.DriverName   `json:"driver"`
+			Backend  kvlite.Backend      `json:"backend"`
+			Drivers  []kvlite.DriverInfo `json:"drivers"`
+			Redis    string              `json:"redis,omitempty"`
 		}{
 			Protocol: "kvlite/1",
 			Entries:  "/v1/entries/{base64url-key}",
 			Methods:  []string{"GET", "PUT", "DELETE"},
-			Driver:   DriverName(database.Backend()),
+			Driver:   kvlite.DriverName(database.Backend()),
 			Backend:  database.Backend(),
 			Drivers:  databases.driverInfos(),
-			Redis:    database.RedisAddress(),
+			Redis:    databases.redisURL(database, options.RedisURL),
 		})
 	})
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, request *http.Request) {
@@ -290,7 +306,7 @@ func startShareServer(db *DB, options SharingOptions) (*shareServer, error) {
 		}
 		switch request.Method {
 		case http.MethodGet:
-			value, found, err := database.engine.Get(request.Context(), key)
+			value, found, err := database.Transport().Get(request.Context(), key)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -308,13 +324,13 @@ func startShareServer(db *DB, options SharingOptions) (*shareServer, error) {
 				http.Error(w, "invalid or oversized body", http.StatusRequestEntityTooLarge)
 				return
 			}
-			if err := database.engine.Put(request.Context(), key, value); err != nil {
+			if err := database.Transport().Put(request.Context(), key, value); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
 		case http.MethodDelete:
-			if err := database.engine.Delete(request.Context(), key); err != nil {
+			if err := database.Transport().Delete(request.Context(), key); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -335,7 +351,7 @@ func startShareServer(db *DB, options SharingOptions) (*shareServer, error) {
 			return
 		}
 		items := make([]scanItem, 0)
-		err = database.engine.ScanPrefix(request.Context(), prefix, func(key, value []byte) error {
+		err = database.Transport().ScanPrefix(request.Context(), prefix, func(key, value []byte) error {
 			items = append(items, scanItem{
 				Key:   base64.RawStdEncoding.EncodeToString(key),
 				Value: base64.RawStdEncoding.EncodeToString(value),
@@ -370,26 +386,15 @@ func startShareServer(db *DB, options SharingOptions) (*shareServer, error) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		database.collectionMu.Lock()
-		defer database.collectionMu.Unlock()
-		items, err := database.readList(request.Context(), key)
+		length, err := database.Transport().PushList(request.Context(), key, newItems, request.URL.Query().Get("left") == "1")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if request.URL.Query().Get("left") == "1" {
-			items = append(newItems, items...)
-		} else {
-			items = append(items, newItems...)
-		}
-		if err := database.writeList(request.Context(), key, items); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
 			Length int `json:"length"`
-		}{Length: len(items)})
+		}{Length: length})
 	})
 	go func() {
 		_ = server.Serve(listener)
@@ -400,7 +405,7 @@ func startShareServer(db *DB, options SharingOptions) (*shareServer, error) {
 // handleJSONEntry is the language-neutral API. It deliberately accepts and
 // returns JSON values, while /v1/kv remains the internal envelope transport
 // used by the Go remote client.
-func handleJSONEntry(db *DB, maxRequestBytes int64, w http.ResponseWriter, request *http.Request) {
+func handleJSONEntry(db *kvlite.DB, maxRequestBytes int64, w http.ResponseWriter, request *http.Request) {
 	rawKey, err := base64.RawURLEncoding.DecodeString(request.PathValue("key"))
 	if err != nil || len(rawKey) == 0 {
 		http.Error(w, "invalid key", http.StatusBadRequest)
@@ -410,34 +415,24 @@ func handleJSONEntry(db *DB, maxRequestBytes int64, w http.ResponseWriter, reque
 	ctx := request.Context()
 	switch request.Method {
 	case http.MethodGet:
-		data, found, err := db.engine.Get(ctx, valueKey(key))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if !found {
+		value, err := db.GetStoredValue(ctx, key)
+		if errors.Is(err, kvlite.ErrNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		value, err := unmarshalEnvelope(data)
 		if err != nil {
 			http.Error(w, "invalid stored value", http.StatusInternalServerError)
 			return
 		}
-		if value.expiresAt > 0 && db.cfg.now().UnixNano() >= value.expiresAt {
-			_ = db.engine.Delete(ctx, valueKey(key))
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		if value.codec != (JSONCodec{}).Name() {
+		if value.Codec != (kvlite.JSONCodec{}).Name() {
 			http.Error(w, "stored value is not JSON", http.StatusUnsupportedMediaType)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if value.expiresAt > 0 {
-			w.Header().Set("X-KVLite-Expires-At", strconv.FormatInt(value.expiresAt, 10))
+		if value.ExpiresAt > 0 {
+			w.Header().Set("X-KVLite-Expires-At", strconv.FormatInt(value.ExpiresAt, 10))
 		}
-		_, _ = w.Write(value.payload)
+		_, _ = w.Write(value.Payload)
 	case http.MethodPut:
 		request.Body = http.MaxBytesReader(w, request.Body, maxRequestBytes)
 		payload, err := io.ReadAll(request.Body)
@@ -450,7 +445,7 @@ func handleJSONEntry(db *DB, maxRequestBytes int64, w http.ResponseWriter, reque
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := db.Put(ctx, key, json.RawMessage(payload), putOptions...); err != nil {
+		if err := db.PutStoredValue(ctx, key, (kvlite.JSONCodec{}).Name(), payload, putOptions...); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -467,7 +462,7 @@ func handleJSONEntry(db *DB, maxRequestBytes int64, w http.ResponseWriter, reque
 	}
 }
 
-func parseTTLQuery(raw string) ([]PutOption, error) {
+func parseTTLQuery(raw string) ([]kvlite.PutOption, error) {
 	if raw == "" {
 		return nil, nil
 	}
@@ -481,7 +476,7 @@ func parseTTLQuery(raw string) ([]PutOption, error) {
 	if seconds > int64(^uint64(0)>>1)/int64(time.Second) {
 		return nil, fmt.Errorf("ttl_seconds is too large")
 	}
-	return []PutOption{TTL(time.Duration(seconds) * time.Second)}, nil
+	return []kvlite.PutOption{kvlite.TTL(time.Duration(seconds) * time.Second)}, nil
 }
 
 func sharingAuth(token string, next http.Handler) http.Handler {
@@ -500,11 +495,14 @@ func sharingAuth(token string, next http.Handler) http.Handler {
 	})
 }
 
-func (server *shareServer) address() string {
+// URL returns the base URL clients should use to connect to this server.
+func (server *Server) URL() string {
 	return "http://" + server.listener.Addr().String()
 }
 
-func (server *shareServer) close() error {
+// Close stops the HTTP listener and closes any auxiliary driver/path mappings.
+// It does not close the primary DB passed to Serve.
+func (server *Server) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := server.server.Shutdown(ctx)
@@ -519,40 +517,42 @@ func (server *shareServer) close() error {
 	return err
 }
 
-// RemoteOptions configures a connection to a shareable KVLite database.
-type RemoteOptions struct {
+// ClientOptions configures an HTTP connection to a KVLite server. Driver is a
+// server-side selection only: it names one server-owned mapping and never
+// identifies a local filesystem path.
+type ClientOptions struct {
 	BearerToken string
 	HTTPClient  *http.Client
+	Driver      kvlite.DriverName
 }
 
-// OpenRemote connects to an owner process created with WithSharing.
-func OpenRemote(baseURL string, remoteOptions RemoteOptions, options ...Option) (*DB, error) {
-	cfg, err := buildConfig(options)
-	if err != nil {
-		return nil, err
-	}
-	if cfg.sharing != nil {
-		return nil, fmt.Errorf("%w: a remote connection cannot host a sharing endpoint", ErrInvalidArgument)
-	}
+// Connect opens a Go DB handle backed by KVLite's optional HTTP transport.
+// The database's storage still belongs to the server. dbOptions configure
+// local decoding behavior (for example WithRegisteredCodec); select a remote
+// driver through ClientOptions.Driver rather than WithDriver.
+func Connect(baseURL string, remoteOptions ClientOptions, dbOptions ...kvlite.Option) (*kvlite.DB, error) {
 	parsed, err := url.Parse(strings.TrimRight(baseURL, "/"))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return nil, fmt.Errorf("%w: valid remote http(s) URL is required", ErrInvalidArgument)
+		return nil, fmt.Errorf("%w: valid remote http(s) URL is required", kvlite.ErrInvalidArgument)
 	}
 	client := remoteOptions.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-	selected := BackendRemote
-	requestedDriver := DriverName("")
-	if cfg.driverExplicit {
-		selected = Backend(cfg.driver)
-		requestedDriver = cfg.driver
+	selected := kvlite.BackendRemote
+	requestedDriver := remoteOptions.Driver
+	if requestedDriver != "" {
+		requestedDriver, err = kvlite.ParseDriverName(string(requestedDriver))
+		if err != nil {
+			return nil, err
+		}
+		selected = kvlite.Backend(requestedDriver)
 	}
 	engine := &remoteEngine{baseURL: parsed.String(), token: remoteOptions.BearerToken, client: client, driver: requestedDriver}
 	if requestedDriver != "" {
 		// An explicit driver is part of the connection contract, not merely a
 		// preference for the first operation. Validate it immediately so callers
-		// get the server's structured driver error from OpenRemote.
+		// get the server's structured driver error from Connect.
 		response, err := engine.request(context.Background(), http.MethodGet, "/v1", nil)
 		if err != nil {
 			return nil, err
@@ -562,24 +562,29 @@ func OpenRemote(baseURL string, remoteOptions RemoteOptions, options ...Option) 
 			return nil, remoteStatusError(response)
 		}
 	}
-	return newDB(engine, cfg, selected)
+	return kvlite.OpenWithEngine(engine, selected, dbOptions...)
+}
+
+// OpenRemote is an explicit alias for Connect.
+func OpenRemote(baseURL string, options ClientOptions, dbOptions ...kvlite.Option) (*kvlite.DB, error) {
+	return Connect(baseURL, options, dbOptions...)
 }
 
 type remoteEngine struct {
 	baseURL string
 	token   string
 	client  *http.Client
-	driver  DriverName
+	driver  kvlite.DriverName
 }
 
 // RemoteDriverError is returned when a remote server cannot honour an explicit
-// X-KVLite-Driver selection. Callers can use errors.Is with
-// ErrDriverNotInstalled, ErrDriverUnavailable, or ErrDriverNotExposed.
+// X-KVLite-Driver selection. Callers can use errors.Is with the corresponding
+// kvlite driver error.
 type RemoteDriverError struct {
 	StatusCode       int
 	Code             string
-	Driver           DriverName
-	AvailableDrivers []DriverName
+	Driver           kvlite.DriverName
+	AvailableDrivers []kvlite.DriverName
 	Message          string
 }
 
@@ -593,13 +598,13 @@ func (err *RemoteDriverError) Error() string {
 func (err *RemoteDriverError) Unwrap() error {
 	switch err.Code {
 	case "driver_not_installed":
-		return ErrDriverNotInstalled
+		return kvlite.ErrDriverNotInstalled
 	case "driver_unavailable":
-		return ErrDriverUnavailable
+		return kvlite.ErrDriverUnavailable
 	case "driver_not_exposed":
-		return ErrDriverNotExposed
+		return kvlite.ErrDriverNotExposed
 	case "invalid_driver":
-		return ErrInvalidArgument
+		return kvlite.ErrInvalidArgument
 	default:
 		return nil
 	}
@@ -715,15 +720,60 @@ func (engine *remoteEngine) PushList(ctx context.Context, key []byte, items [][]
 	return result.Length, nil
 }
 
+func encodeList(items [][]byte) []byte {
+	size := 4
+	for _, item := range items {
+		size += 4 + len(item)
+	}
+	result := make([]byte, size)
+	binary.BigEndian.PutUint32(result[:4], uint32(len(items)))
+	offset := 4
+	for _, item := range items {
+		binary.BigEndian.PutUint32(result[offset:], uint32(len(item)))
+		offset += 4
+		copy(result[offset:], item)
+		offset += len(item)
+	}
+	return result
+}
+
+func decodeList(data []byte) ([][]byte, error) {
+	if len(data) < 4 {
+		return nil, fmt.Errorf("kvlite: invalid list encoding")
+	}
+	count := int(binary.BigEndian.Uint32(data[:4]))
+	if count > (len(data)-4)/4 {
+		return nil, fmt.Errorf("kvlite: invalid list item count")
+	}
+	items := make([][]byte, 0, count)
+	offset := 4
+	for index := 0; index < count; index++ {
+		if offset+4 > len(data) {
+			return nil, fmt.Errorf("kvlite: truncated list encoding")
+		}
+		length := int(binary.BigEndian.Uint32(data[offset : offset+4]))
+		offset += 4
+		if length < 0 || offset+length > len(data) {
+			return nil, fmt.Errorf("kvlite: truncated list item")
+		}
+		items = append(items, append([]byte(nil), data[offset:offset+length]...))
+		offset += length
+	}
+	if offset != len(data) {
+		return nil, fmt.Errorf("kvlite: trailing list data")
+	}
+	return items, nil
+}
+
 func remoteStatusError(response *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
 	message := strings.TrimSpace(string(body))
 	var payload struct {
 		Error struct {
-			Code             string       `json:"code"`
-			Driver           DriverName   `json:"driver"`
-			AvailableDrivers []DriverName `json:"available_drivers"`
-			Message          string       `json:"message"`
+			Code             string              `json:"code"`
+			Driver           kvlite.DriverName   `json:"driver"`
+			AvailableDrivers []kvlite.DriverName `json:"available_drivers"`
+			Message          string              `json:"message"`
 		} `json:"error"`
 	}
 	if json.Unmarshal(body, &payload) == nil && payload.Error.Code != "" {

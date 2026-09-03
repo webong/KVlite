@@ -178,6 +178,10 @@ func (db *DB) push(ctx context.Context, name string, left bool, values ...any) (
 		}
 		encoded = append(encoded, item)
 	}
+	return db.pushEncodedList(ctx, key, encoded, left)
+}
+
+func (db *DB) pushEncodedList(ctx context.Context, key []byte, encoded [][]byte, left bool) (int, error) {
 	if remote, ok := db.engine.(interface {
 		PushList(context.Context, []byte, [][]byte, bool) (int, error)
 	}); ok {
@@ -204,7 +208,7 @@ func (db *DB) push(ctx context.Context, name string, left bool, values ...any) (
 }
 
 // LRange decodes the inclusive [start, stop] range into a pointer to []T.
-// Negative indexes count from the end, matching Redis conventions.
+// Negative indexes count from the end.
 func (db *DB) LRange(ctx context.Context, name string, start, stop int, target any) error {
 	if err := db.ensureOpen(); err != nil {
 		return err

@@ -9,6 +9,12 @@ retains RocksDB as the compatibility default. `kvlite driver list` displays the 
 the binary; repeat `--driver-path name=directory` to expose additional mappings
 for HTTP clients.
 
+The JSON/HTTP and Redis-compatible surfaces are linked from
+[`extensions/http`](../../extensions/http/) and
+[`extensions/redis`](../../extensions/redis/); neither is part of the embedded
+core or the C shared-library bundle. Installing the CLI is the intentional
+opt-in for server mode.
+
 Build only this artifact on the current native platform:
 
 ```bash

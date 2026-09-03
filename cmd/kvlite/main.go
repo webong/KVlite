@@ -10,6 +10,8 @@ import (
 	"syscall"
 
 	"github.com/webong/kvlite"
+	kvlitehttp "github.com/webong/kvlite/extensions/http"
+	kvliteredis "github.com/webong/kvlite/extensions/redis"
 )
 
 func main() {
@@ -59,28 +61,42 @@ func run(args []string) int {
 	if *driver == "" {
 		*driver = string(kvlite.DefaultDriver())
 	}
-	options := []kvlite.Option{kvlite.WithDriver(*driver), kvlite.WithSharing(kvlite.SharingOptions{
-		ListenAddress:   *listen,
-		BearerToken:     *token,
-		MaxRequestBytes: *maxRequestBytes,
-		DriverPaths:     driverPaths.items,
-	})}
-	if *redisListen != "" {
-		options = append(options, kvlite.WithRedis(kvlite.RedisOptions{
-			ListenAddress: *redisListen,
-			Password:      *redisPassword,
-		}))
-	}
-	db, err := kvlite.Open(*path, options...)
+	db, err := kvlite.Open(*path, kvlite.WithDriver(*driver))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
 		return 1
 	}
 	defer db.Close()
+	var redisServer *kvliteredis.Server
+	redisURL := ""
+	if *redisListen != "" {
+		redisServer, err = kvliteredis.Serve(db, kvliteredis.Options{
+			ListenAddress: *redisListen,
+			Password:      *redisPassword,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
+			return 1
+		}
+		defer redisServer.Close()
+		redisURL = redisServer.URL()
+	}
+	server, err := kvlitehttp.Serve(db, kvlitehttp.Options{
+		ListenAddress:   *listen,
+		BearerToken:     *token,
+		MaxRequestBytes: *maxRequestBytes,
+		DriverPaths:     driverPaths.items,
+		RedisURL:        redisURL,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
+		return 1
+	}
+	defer server.Close()
 	fmt.Printf("driver=%s\n", db.Backend())
-	fmt.Printf("http=%s\n", db.SharingAddress())
-	if address := db.RedisAddress(); address != "" {
-		fmt.Printf("redis=%s\n", address)
+	fmt.Printf("http=%s\n", server.URL())
+	if redisServer != nil {
+		fmt.Printf("redis=%s\n", redisServer.URL())
 	}
 	fmt.Println("kvlite: serving; press Ctrl-C to stop")
 
@@ -145,6 +161,6 @@ func runDriver(args []string) int {
 func usage() {
 	fmt.Fprintln(os.Stderr, "Usage: kvlite serve --path DIR [--driver NAME] [--driver-path NAME=DIR] [--listen HOST:PORT] [--token TOKEN] [--redis-listen HOST:PORT] [--redis-password PASSWORD]")
 	fmt.Fprintln(os.Stderr, "       kvlite driver list")
-	fmt.Fprintln(os.Stderr, "\nThe binary owns server-defined driver/path mappings and exposes the language-neutral HTTP and optional Redis APIs.")
+	fmt.Fprintln(os.Stderr, "\nThe binary links KVLite's optional HTTP and Redis extensions and owns server-defined driver/path mappings.")
 	fmt.Fprintln(os.Stderr, "Build a driver bundle with -tags kvlite_rocksdb,rocksdb or -tags kvlite_leveldb, then inspect it with `kvlite driver list`.")
 }

@@ -18,13 +18,25 @@
       "description": "Pure-Go LevelDB driver bundle."
     }
   ],
+  "extensions": [
+    {
+      "id": "http",
+      "goModule": "github.com/webong/kvlite/extensions/http",
+      "description": "Optional JSON/HTTP server and Go remote-client extension. The CLI links it; embedded C bundles do not."
+    },
+    {
+      "id": "redis",
+      "goModule": "github.com/webong/kvlite/extensions/redis",
+      "description": "Optional Redis-compatible RESP server extension. The CLI links it; embedded C bundles do not."
+    }
+  ],
   "artifacts": [
     {
       "id": "cli",
       "source": "cmd/kvlite",
       "kind": "executable",
       "releasePath": "bin/kvlite",
-      "description": "Owns selected KVLite driver directories and exposes the HTTP and Redis-compatible APIs."
+      "description": "Owns selected KVLite driver directories and links the optional HTTP and Redis server extensions."
     },
     {
       "id": "c-shared",
@@ -40,25 +52,25 @@
       "id": "php",
       "source": "lib/bindings/php",
       "package": "webong/kvlite",
-      "transports": ["c-abi", "http"]
+      "transports": ["c-abi", "http", "redis"]
     },
     {
       "id": "python",
       "source": "lib/bindings/python",
       "package": "kvlite",
-      "transports": ["c-abi", "http"]
+      "transports": ["c-abi", "http", "redis"]
     },
     {
       "id": "node",
       "source": "lib/bindings/node",
       "package": "@webong/kvlite",
-      "transports": ["c-abi", "http"]
+      "transports": ["c-abi", "http", "redis"]
     },
     {
       "id": "rust",
       "source": "lib/bindings/rust",
       "package": "kvlite",
-      "transports": ["c-abi"]
+      "transports": ["c-abi", "http", "redis"]
     }
   ],
   "targets": {

@@ -1,4 +1,6 @@
-package kvlite
+// Package kvliteredis adds KVLite's optional Redis-compatible RESP server.
+// Importing the embeddable kvlite core alone never starts a listener.
+package kvliteredis
 
 import (
 	"bufio"
@@ -12,20 +14,24 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/webong/kvlite"
 )
 
-// RedisOptions configures the optional Redis protocol endpoint. The endpoint
+// Options configures the optional Redis protocol endpoint. The endpoint
 // speaks RESP2 and runs in the same process as the owning DB handle.
 //
 // A password enables AUTH. MaxClients is zero for no explicit connection
 // limit; a positive value bounds active client connections.
-type RedisOptions struct {
+type Options struct {
 	ListenAddress string
 	Password      string
 	MaxClients    int
 }
 
-type redisServer struct {
+// Server owns a Redis-compatible listener. Closing it never closes the
+// caller-owned embedded KVLite DB.
+type Server struct {
 	listener net.Listener
 	done     chan struct{}
 	once     sync.Once
@@ -44,12 +50,25 @@ type redisSession struct {
 	proto  int
 }
 
-func startRedisServer(db *DB, options RedisOptions) (*redisServer, error) {
+// Serve starts an explicit Redis-compatible RESP server for db.
+func Serve(db *kvlite.DB, options Options) (*Server, error) {
+	if db == nil {
+		return nil, fmt.Errorf("%w: database is required", kvlite.ErrInvalidArgument)
+	}
+	if db.Backend() == kvlite.BackendRemote {
+		return nil, fmt.Errorf("%w: a remote database cannot own a Redis server", kvlite.ErrInvalidArgument)
+	}
+	if options.ListenAddress == "" {
+		options.ListenAddress = "127.0.0.1:6379"
+	}
+	if options.MaxClients < 0 {
+		return nil, fmt.Errorf("%w: max clients cannot be negative", kvlite.ErrInvalidArgument)
+	}
 	listener, err := net.Listen("tcp", options.ListenAddress)
 	if err != nil {
 		return nil, fmt.Errorf("kvlite: start Redis endpoint: %w", err)
 	}
-	server := &redisServer{
+	server := &Server{
 		listener: listener,
 		done:     make(chan struct{}),
 		conns:    make(map[net.Conn]struct{}),
@@ -58,11 +77,11 @@ func startRedisServer(db *DB, options RedisOptions) (*redisServer, error) {
 		server.sem = make(chan struct{}, options.MaxClients)
 	}
 	server.wg.Add(1)
-	go server.acceptLoop(db, options)
+	go server.acceptLoop(newDatabase(db.Protocol()), options)
 	return server, nil
 }
 
-func (server *redisServer) acceptLoop(db *DB, options RedisOptions) {
+func (server *Server) acceptLoop(db *database, options Options) {
 	defer server.wg.Done()
 	for {
 		conn, err := server.listener.Accept()
@@ -108,7 +127,7 @@ func (server *redisServer) acceptLoop(db *DB, options RedisOptions) {
 	}
 }
 
-func (server *redisServer) register(conn net.Conn) bool {
+func (server *Server) register(conn net.Conn) bool {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	if server.closed {
@@ -118,17 +137,20 @@ func (server *redisServer) register(conn net.Conn) bool {
 	return true
 }
 
-func (server *redisServer) unregister(conn net.Conn) {
+func (server *Server) unregister(conn net.Conn) {
 	server.mu.Lock()
 	delete(server.conns, conn)
 	server.mu.Unlock()
 }
 
-func (server *redisServer) address() string {
+// URL reports the listener address in Redis URL form.
+func (server *Server) URL() string {
 	return "redis://" + server.listener.Addr().String()
 }
 
-func (server *redisServer) close() error {
+// Close stops the Redis listener and active clients. It is safe to call more
+// than once and does not close the caller-owned DB.
+func (server *Server) Close() error {
 	var closeErr error
 	server.once.Do(func() {
 		close(server.done)
@@ -150,7 +172,7 @@ func (server *redisServer) close() error {
 	return closeErr
 }
 
-func serveRedisConnection(db *DB, conn net.Conn, password string, session *redisSession) {
+func serveRedisConnection(db *database, conn net.Conn, password string, session *redisSession) {
 	reader := bufio.NewReaderSize(conn, 64<<10)
 	writer := bufio.NewWriterSize(conn, 64<<10)
 	for {
@@ -165,9 +187,9 @@ func serveRedisConnection(db *DB, conn net.Conn, password string, session *redis
 			}
 			continue
 		}
-		db.redisMu.Lock()
+		db.store.Lock()
 		reply, quit := db.redisDispatch(args, password, session)
-		db.redisMu.Unlock()
+		db.store.Unlock()
 		if err := writeRedisReply(writer, reply); err != nil {
 			return
 		}
@@ -205,7 +227,7 @@ func redisCommandArgs(request respValue) ([][]byte, error) {
 	return args, nil
 }
 
-func (db *DB) redisDispatch(args [][]byte, password string, session *redisSession) (respValue, bool) {
+func (db *database) redisDispatch(args [][]byte, password string, session *redisSession) (respValue, bool) {
 	command := strings.ToUpper(string(args[0]))
 
 	// HELLO can authenticate inline (HELLO 3 AUTH default password), which is
@@ -368,7 +390,7 @@ func (db *DB) redisDispatch(args [][]byte, password string, session *redisSessio
 
 func redisSyntaxError() respValue { return respErrorString("ERR syntax error") }
 
-func (db *DB) redisAuth(args [][]byte, password string, session *redisSession) respValue {
+func (db *database) redisAuth(args [][]byte, password string, session *redisSession) respValue {
 	if password == "" {
 		return respErrorString("ERR AUTH called without any password configured")
 	}
@@ -390,7 +412,7 @@ func (db *DB) redisAuth(args [][]byte, password string, session *redisSession) r
 	return respSimpleString("OK")
 }
 
-func (db *DB) redisHello(args [][]byte, password string, session *redisSession) (respValue, bool) {
+func (db *database) redisHello(args [][]byte, password string, session *redisSession) (respValue, bool) {
 	if len(args) < 1 {
 		return redisSyntaxError(), true
 	}
@@ -441,7 +463,7 @@ func (db *DB) redisHello(args [][]byte, password string, session *redisSession) 
 	return respArrayValues(replyItems...), true
 }
 
-func (db *DB) redisClient(args [][]byte, session *redisSession) respValue {
+func (db *database) redisClient(args [][]byte, session *redisSession) respValue {
 	if len(args) < 2 {
 		return redisSyntaxError()
 	}
@@ -458,14 +480,14 @@ func (db *DB) redisClient(args [][]byte, session *redisSession) respValue {
 	}
 }
 
-func (db *DB) redisCommandInfo(args [][]byte) respValue {
+func (db *database) redisCommandInfo(args [][]byte) respValue {
 	if len(args) == 1 || (len(args) == 2 && strings.EqualFold(string(args[1]), "INFO")) || (len(args) == 2 && strings.EqualFold(string(args[1]), "COUNT")) {
 		return respArrayValues()
 	}
 	return respArrayValues()
 }
 
-func (db *DB) redisConfig(args [][]byte) respValue {
+func (db *database) redisConfig(args [][]byte) respValue {
 	if len(args) < 2 {
 		return redisSyntaxError()
 	}
@@ -475,7 +497,7 @@ func (db *DB) redisConfig(args [][]byte) respValue {
 	return respSimpleString("OK")
 }
 
-func (db *DB) redisInfo(args [][]byte) respValue {
+func (db *database) redisInfo(args [][]byte) respValue {
 	if len(args) > 2 {
 		return redisSyntaxError()
 	}

@@ -3,9 +3,10 @@
 KVLite is an engine-neutral, typed key-value core. Storage engines are normal
 optional driver modules—not dependencies pulled into every application. The
 core provides serialization, per-record TTLs, collections, metadata checks,
-migrations, and HTTP/Redis/C-ABI surfaces; a driver supplies the local storage
-engine. Go is the implementation language, not the required application
-language: other languages use JSON/HTTP, Redis, or a driver-specific C bundle.
+and migrations; a driver supplies the local storage engine. HTTP and Redis are
+explicitly installed extensions, while the C ABI is an embedded boundary. Go
+is the implementation language, not the required application language: other
+languages use an optional server extension or a driver-specific C bundle.
 
 This repository is an MVP: the storage format is versioned and tested, while
 the public API is still free to evolve before a first stable release.
@@ -19,15 +20,16 @@ the public API is still free to evolve before a first stable release.
 - Per-key and per-hash-field TTLs with exact read-time expiry.
 - Hashes, string sets, and typed lists implemented with collision-safe key
   namespaces.
-- An optional authenticated HTTP owner/client mode where clients select a
+- An optional authenticated HTTP owner/client extension where clients select a
   server-exposed driver name, never a filesystem path.
 - A RocksDB compaction filter that physically discards expired value envelopes;
   every backend still enforces TTL logically at read time.
 - A persistent driver manifest that prevents one engine from accidentally
   opening a KVLite directory initialized for another engine.
-- A versioned, language-neutral JSON/HTTP API and OpenAPI description.
-- An optional single-node Redis RESP2-compatible server for existing Redis
-  clients and CLI tools.
+- A versioned, language-neutral JSON/HTTP API and OpenAPI description provided
+  by `extensions/http` and the server CLI.
+- An optional single-node Redis RESP2-compatible server extension for existing
+  Redis clients and CLI tools.
 - First-class PHP, Python, Node.js, and Rust packages built on a small,
   versioned C ABI for embedded mode.
 
@@ -48,6 +50,25 @@ db, err := kvlite.Open("./app-data", kvlite.WithDriver("rocksdb"))
 and the native library. A future `drivers/berkeleydb` remains entirely outside
 the core module and its license obligations apply only to users who install it.
 See [`drivers/`](drivers/) for the module and release-tag contract.
+
+### Embedded is the default
+
+An ordinary `kvlite.Open` call opens only an embedded database. It starts no
+network listener, and the core module does not depend on HTTP or Redis server
+code. This is the normal SQLite-like path for Go and for language bindings
+using the C ABI.
+
+When an application explicitly needs cross-process access, install the
+separate extension:
+
+```bash
+go get github.com/webong/kvlite/extensions/http
+go get github.com/webong/kvlite/extensions/redis
+```
+
+The standalone `kvlite serve` CLI links both extensions for you. Each remains
+an explicit opt-in: neither protocol starts as part of an ordinary embedded
+`Open`.
 
 ### RocksDB driver
 
@@ -76,8 +97,8 @@ then run:
 go test -tags rocksdb ./drivers/rocksdb/...
 ```
 
-The `rocksdb` build tag is deliberate: consumers can run core, codec, and
-remote-client builds without native headers. Calling `Open(path)` asks for the
+The `rocksdb` build tag is deliberate: consumers can run core, codec, and the
+optional HTTP and Redis extensions without native headers. Calling `Open(path)` asks for the
 compatibility default `rocksdb`; if no driver was imported it returns
 `ErrDriverNotInstalled`, and if the imported RocksDB driver lacks native
 support it returns `ErrRocksDBNotBuilt`.
@@ -93,7 +114,7 @@ make test-rocksdb-docker
 
 The helper builds `docker/rocksdb-test/Dockerfile`, compiles a pinned RocksDB
 source release, installs the cgo linker dependencies, and runs the core,
-RocksDB driver, CLI, C ABI, and example suites. The equivalent command is
+RocksDB driver, HTTP and Redis extensions, CLI, C ABI, and example suites. The equivalent command is
 `docker compose -f compose.rocksdb.yml run --rm --build rocksdb-test`.
 
 KVLite's Docker compatibility check runs both ends of the supported range:
@@ -200,9 +221,10 @@ including when the update comes through the HTTP client.
 
 ## Use KVLite from any language
 
-The easiest cross-language deployment is to run the owner binary and speak the
-JSON API. The server owns every local path; every other language uses HTTP and
-never needs native database headers or filesystem access.
+KVLite remains embedded-first. When several processes or languages need the
+same database, run the owner with the optional HTTP and/or Redis extension.
+The server owns every local path; every other language uses a network protocol
+and never needs native database headers or filesystem access.
 
 Start the owner:
 
@@ -268,18 +290,34 @@ redis-cli -h 127.0.0.1 -p 6379 -a "$KVLITE_REDIS_PASSWORD" SET user:101 '{"id":1
 redis-cli -h 127.0.0.1 -p 6379 -a "$KVLITE_REDIS_PASSWORD" GET user:101
 ```
 
-The Go API is also available directly:
+The Go API is also available directly by importing only the Redis extension:
 
 ```go
-db, err := kvlite.Open("./kvlite-data", kvlite.WithRedis(kvlite.RedisOptions{
-    ListenAddress: "127.0.0.1:6379",
-    Password:      os.Getenv("KVLITE_REDIS_PASSWORD"),
-}))
+import (
+    "fmt"
+    "log"
+    "os"
+
+    "github.com/webong/kvlite"
+    kvliteredis "github.com/webong/kvlite/extensions/redis"
+    _ "github.com/webong/kvlite/drivers/rocksdb"
+)
+
+db, err := kvlite.Open("./kvlite-data", kvlite.WithDriver("rocksdb"))
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
-fmt.Println(db.RedisAddress())
+
+server, err := kvliteredis.Serve(db, kvliteredis.Options{
+    ListenAddress: "127.0.0.1:6379",
+    Password:      os.Getenv("KVLITE_REDIS_PASSWORD"),
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer server.Close()
+fmt.Println(server.URL())
 ```
 
 The current server covers the everyday Redis data model: `GET`/`SET`, TTL
@@ -383,33 +421,55 @@ are not bundled yet. The release packaging phase must bundle those files,
 relocate their loader paths, and publish their license notices before the
 binary downloads are suitable for clean machines.
 
-## Multi-process sharing
+## Optional multi-process sharing
 
-The server owns each selected driver/path pair and remains the only process
-allowed to open those database directories. It can expose a loopback HTTP
-endpoint. In an application, add blank imports for `drivers/rocksdb` and
-`drivers/leveldb` before using this configuration:
+The HTTP and Redis servers live in their respective extension modules, not the
+core module. A server owns each selected driver/path pair and remains the only
+process allowed to open those database directories. In an application, add
+blank imports for `drivers/rocksdb` and `drivers/leveldb` before using this
+configuration:
 
 ```go
-owner, err := kvlite.Open("./rocks-data", kvlite.WithDriver("rocksdb"), kvlite.WithSharing(kvlite.SharingOptions{
+import (
+	"log"
+	"os"
+
+	"github.com/webong/kvlite"
+	kvlitehttp "github.com/webong/kvlite/extensions/http"
+	_ "github.com/webong/kvlite/drivers/leveldb"
+	_ "github.com/webong/kvlite/drivers/rocksdb"
+)
+
+owner, err := kvlite.Open("./rocks-data", kvlite.WithDriver("rocksdb"))
+if err != nil {
+	log.Fatal(err)
+}
+defer owner.Close()
+
+server, err := kvlitehttp.Serve(owner, kvlitehttp.Options{
 	ListenAddress: "127.0.0.1:8089",
 	BearerToken:   os.Getenv("KVLITE_TOKEN"),
 	DriverPaths: map[kvlite.DriverName]string{
 		kvlite.DriverLevelDB: "./level-data",
 	},
-}))
+})
+if err != nil {
+	log.Fatal(err)
+}
+defer server.Close()
 ```
 
 Another process connects without opening the local database directory:
 
 ```go
-db, err := kvlite.OpenRemote("http://127.0.0.1:8089", kvlite.RemoteOptions{
+db, err := kvlitehttp.Connect("http://127.0.0.1:8089", kvlitehttp.ClientOptions{
 	BearerToken: os.Getenv("KVLITE_TOKEN"),
-}, kvlite.WithDriver("leveldb"))
+	Driver:      kvlite.DriverLevelDB,
+})
 ```
 
-When `WithDriver` is supplied, `OpenRemote` validates that selection during
-connection and returns the server's structured driver error immediately.
+When `ClientOptions.Driver` is supplied, `Connect` validates that selection
+during connection and returns the server's structured driver error immediately.
 
 The transport intentionally defaults to an ephemeral loopback listener when
 no address is supplied. It does not terminate TLS; use a local-only socket or a

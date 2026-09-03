@@ -29,6 +29,10 @@ client against KVLite's optional Redis endpoint. HTTP `connect()` clients may
 select a driver name; the server honours it only when it has an installed,
 server-owned driver/path mapping.
 
+The HTTP and Redis services are explicit server extensions linked by `kvlite
+serve`; the embedded C ABI used by `open()` does not include or start either
+listener.
+
 The wrappers serialize normal values as JSON and each native wrapper also has a
 raw byte API for applications that choose MessagePack, protobuf, or another
 codec. Packages are source-ready for Composer, PyPI, npm, and crates.io; the

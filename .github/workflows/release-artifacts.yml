@@ -98,7 +98,7 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" != 'tag' ]]; then
             version="dev-${GITHUB_SHA:0:12}"
           fi
-          go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./drivers/rocksdb/... ./examples/basic
+          go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./drivers/rocksdb/... ./extensions/http/... ./extensions/redis/... ./examples/basic
           make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=rocksdb
           make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=leveldb
 
