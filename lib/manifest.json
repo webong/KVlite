@@ -40,13 +40,17 @@
       "id": "http",
       "goModule": "github.com/webong/kvlite/extensions/http",
       "sourceManifest": "../extensions/http/kvlite-module.json",
-      "description": "Optional JSON/HTTP server and Go remote-client extension. It is linked only by callers that choose it; embedded C bundles do not include it."
+      "standalone": "extensions/http/cmd/kvlite-http",
+      "releasePath": "modules/http/bin/kvlite-http",
+      "description": "Optional JSON/HTTP server and Go remote-client extension. It is linked only by callers that choose it; embedded C bundles do not include it. The standalone executable bundle contains no statically linked storage driver and opens an installed driver C-shared module at runtime."
     },
     {
       "id": "redis",
       "goModule": "github.com/webong/kvlite/extensions/redis",
       "sourceManifest": "../extensions/redis/kvlite-module.json",
-      "description": "Optional Redis-compatible RESP server extension. It is linked only by callers that choose it; embedded C bundles do not include it."
+      "standalone": "extensions/redis/cmd/kvlite-redis",
+      "releasePath": "modules/redis/bin/kvlite-redis",
+      "description": "Optional Redis-compatible RESP server extension. It is linked only by callers that choose it; embedded C bundles do not include it. The standalone executable bundle contains no statically linked storage driver and opens an installed driver C-shared module at runtime."
     }
   ],
   "artifacts": [
@@ -55,7 +59,7 @@
       "source": "cmd/kvlite",
       "kind": "executable",
       "releasePath": "bin/kvlite",
-      "description": "Owns selected KVLite driver directories. Current convenience builds link the optional HTTP and Redis server extensions; standalone protocol artifacts are the next module-loader milestone."
+      "description": "Owns selected KVLite driver directories. Release builds carry kvlite_no_linked_extensions and launch verified standalone protocol executables; pass --linked-extensions only for a development/convenience profile."
     },
     {
       "id": "c-shared",

@@ -6,12 +6,16 @@ ordinary `Open` path is embedded-only and never opens a network listener.
 
 This is the linked Go implementation. Its `kvlite-module.json` uses the same
 catalog contract as drivers, so a standalone executable form can be installed and
-discovered without compiling a host application. It will attach to the single
-KVLite database owner over private local IPC; it will not open a second copy of
-a database directory. See [the module contract](../../MODULES.md).
+discovered without compiling a host application. Standalone mode is a direct
+owner: the `kvlite-http` process opens its own database directory itself and
+serves exactly one protocol surface. Run one standalone HTTP *or* one
+standalone Redis process per database directory; sharing one directory between
+two standalone transports needs a future shared-owner IPC design. See
+[the module contract](../../MODULES.md).
 
-There is also a standalone entrypoint that can be shipped separately from
-applications:
+There is also a standalone entrypoint that is shipped as an installable
+executable module (no statically linked storage driver; it opens an installed
+driver C-shared bundle at runtime):
 
 ```bash
 kvlite-http --path ./data --driver leveldb --listen 127.0.0.1:8089 --token "$KVLITE_TOKEN"

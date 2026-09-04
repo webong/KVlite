@@ -101,8 +101,20 @@ In standalone mode, only one protocol extension may own the database directory p
 CLI instance; choose either HTTP (default) or Redis.
 
 HTTP and Redis expose the same module metadata model as storage drivers. Standalone
-binaries can be discovered through the catalog via `kvlite module list` and run as
-extensions when needed.
+binaries are built from their own Go modules without statically linking any
+storage driver and can be discovered through the catalog via
+`kvlite module list`, then run as extensions when needed:
+
+```bash
+make release-http RELEASE_VERSION=v0.1.0
+make release-redis RELEASE_VERSION=v0.1.0
+```
+
+Driver release CLIs are extension-free hosts by default (built with
+`kvlite_no_linked_extensions`): they launch a verified standalone protocol
+executable in `auto` or `standalone` mode. A standalone protocol process is a
+direct owner of its own database directory; run one standalone HTTP *or* one
+standalone Redis process per directory.
 
 ### RocksDB driver
 
@@ -441,6 +453,8 @@ Build one separately installable driver bundle on each native target:
 ```bash
 make release RELEASE_VERSION=v0.1.0 DRIVER=leveldb
 make release RELEASE_VERSION=v0.1.0 DRIVER=rocksdb
+make release-http RELEASE_VERSION=v0.1.0
+make release-redis RELEASE_VERSION=v0.1.0
 ```
 
 For Berkeley DB distributions where the owner has accepted the license terms,
@@ -453,9 +467,11 @@ make release-berkeleydb RELEASE_VERSION=v0.1.0 \
   CGO_LDFLAGS="-L/opt/bdb/lib -ldb"
 ```
 
-This emits the CLI, the platform shared library, the reviewed `kvlite.h` ABI
-header, and `SHA256SUMS` under
-`dist/v0.1.0/<os>-<arch>/drivers/<driver>/`. Because RocksDB is a cgo/C++
+This emits the driver CLI (extension-free by default), the platform shared
+library, the reviewed `kvlite.h` ABI header, and `SHA256SUMS` under
+`dist/v0.1.0/<os>-<arch>/drivers/<driver>/`, plus standalone protocol
+executables with their own checksummed manifests under
+`dist/v0.1.0/<os>-<arch>/modules/{http,redis}/`. Because RocksDB is a cgo/C++
 dependency, the script intentionally refuses cross-compilation; the
 included GitHub Actions workflow builds Linux and macOS artifacts on native
 runners. `windows-amd64` is already part of the release contract and can be

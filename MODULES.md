@@ -102,7 +102,9 @@ gains standalone protocol artifacts.
 
 The standalone transport form is an executable module started explicitly by the
 caller. In this milestone, it owns its own `kvlite` database path directly in the
-process and does not yet use shared in-process IPC.
+process and does not yet use shared in-process IPC. Run one standalone HTTP
+*or* one standalone Redis process per database directory; two standalone
+transports must never own the same directory at once.
 
 This is sufficient for optional deployment shapes where HTTP or Redis is chosen as
 the single protocol surface for one CLI invocation.
@@ -110,12 +112,65 @@ the single protocol surface for one CLI invocation.
 This permits installed HTTP and Redis modules without relying on Go's
 toolchain-coupled `plugin` mechanism.
 
-## Current release transition
+## Installed release layout
 
-`scripts/build-release.sh` now emits a checksummed `kvlite-module.json` with
-each selected driver bundle. Today a driver bundle is a prebuilt `libkvlite`
-C shared library and/or `kvlite` executable containing core plus that driver;
-language bindings can use it without compiling Go or RocksDB.
+`scripts/build-release.sh` emits a checksummed `kvlite-module.json` with every
+bundle. A driver bundle is a prebuilt `libkvlite` C shared library and/or a
+`kvlite` host/CLI executable containing core plus that driver; language
+bindings can use it without compiling Go or RocksDB. Driver release CLIs are
+built with `kvlite_no_linked_extensions` by default, so they stay small
+host/runners and launch verified standalone protocol executables in `auto` or
+`standalone` mode. Pass `--linked-extensions` (or
+`KVLITE_LINKED_EXTENSIONS=1`) only for an explicit development/convenience
+profile that links HTTP and Redis into the CLI.
+
+Protocol bundles are installed executable modules built from their own Go
+module without statically linking any storage driver:
+
+```text
+dist/<version>/<os>-<arch>/modules/http/
+  bin/kvlite-http[.exe]
+  kvlite-module.json
+  SHA256SUMS
+
+dist/<version>/<os>-<arch>/modules/redis/
+  bin/kvlite-redis[.exe]
+  kvlite-module.json
+  SHA256SUMS
+```
+
+Build them with:
+
+```bash
+make release-http RELEASE_VERSION=v0.1.0
+make release-redis RELEASE_VERSION=v0.1.0
+```
+
+Set `KVLITE_HOME=<install-root>` with driver bundles beneath
+`<install-root>/drivers/*` and protocol bundles beneath
+`<install-root>/modules/*`; the current `DefaultModulePaths` implementation
+discovers both. A protocol executable finds the requested driver's installed
+C-shared module and opens it through the runtime driver loader (CGO-enabled
+native builds). Verify everything before serving:
+
+```bash
+kvlite module list
+kvlite module verify leveldb
+kvlite module verify http
+kvlite module verify redis
+kvlite serve --path ./data --driver leveldb --extension-mode standalone --listen 127.0.0.1:8080
+```
+
+One current boundary: the v1 C embedding ABI exposes only
+put/get/delete, so a standalone protocol process that opens its driver through
+an installed C-shared module cannot serve operations that require key scans.
+In practice, standalone HTTP single-entry put/get works, and standalone Redis
+answers `PING` and owns its database path, but Redis data commands fail with a
+clear `does not expose scan` error. Full Redis data-plane coverage stays in
+linked mode until a scan-capable driver ABI exists; that, like shared-owner
+IPC, is a separate milestone, not a documentation claim.
+
+## Current release transition
 
 All optional source modules now live under `extensions/*`: RocksDB, LevelDB,
 Berkeley DB, HTTP, and Redis. Linked Go modules

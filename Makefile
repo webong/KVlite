@@ -1,4 +1,4 @@
-.PHONY: test test-race test-rocksdb test-rocksdb-docker test-rocksdb-compat test-berkeleydb test-bindings-docker test-bindings-leveldb vet build-cli build-c-shared release release-cli release-c-shared release-berkeleydb
+.PHONY: test test-race test-rocksdb test-rocksdb-docker test-rocksdb-compat test-berkeleydb test-bindings-docker test-bindings-leveldb test-standalone-modules vet build-cli build-c-shared release release-cli release-c-shared release-berkeleydb release-http release-redis
 
 RELEASE_VERSION ?= dev
 RELEASE_TARGET ?= $(shell go env GOHOSTOS)-$(shell go env GOHOSTARCH)
@@ -75,3 +75,20 @@ release-c-shared:
 release-berkeleydb:
 	ALLOW_BERKELEYDB_BUNDLE=1 \
 	./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --driver berkeleydb --allow-berkeleydb
+
+# Standalone protocol extension bundles. The executables contain only core
+# plus their protocol implementation and open an installed driver C-shared
+# module at runtime; they never statically link a storage driver.
+release-http:
+	bash ./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --extension http
+
+release-redis:
+	bash ./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --extension redis
+
+# Native LevelDB integration check for standalone extension bundles: builds a
+# LevelDB driver bundle plus both protocol executables, assembles them under a
+# temporary KVLITE_HOME, and proves discovery, verification, sole-owner HTTP
+# and Redis operation, and the missing-driver error. Needs loopback networking
+# and CGO_ENABLED=1; run on a native runner, not in a restricted sandbox.
+test-standalone-modules:
+	bash ./scripts/test-standalone-modules.sh

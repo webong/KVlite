@@ -6,12 +6,21 @@ ordinary `Open` never imports or starts a network listener.
 
 This is the linked Go implementation. Its `kvlite-module.json` uses the same
 catalog contract as drivers, so a standalone executable form can be installed
-and discovered without compiling a host application. It will attach to the
-single KVLite database owner over private local IPC; it will not open a second
-copy of a database directory. See [the module contract](../../MODULES.md).
+and discovered without compiling a host application. Standalone mode is a
+direct owner: the `kvlite-redis` process opens its own database directory
+itself and serves exactly one protocol surface. Run one standalone Redis *or*
+one standalone HTTP process per database directory; sharing one directory
+between two standalone transports needs a future shared-owner IPC design. One
+further boundary: the v1 C embedding ABI exposes only put/get/delete, so a
+standalone Redis process that opens its driver through an installed C-shared
+module answers `PING` and owns its path but returns a clear scan-unsupported
+error for data commands. Full Redis data-plane coverage stays in linked mode
+until a scan-capable driver ABI exists. See
+[the module contract](../../MODULES.md).
 
-There is also a standalone entrypoint that can be shipped separately from
-applications:
+There is also a standalone entrypoint that is shipped as an installable
+executable module (no statically linked storage driver; it opens an installed
+driver C-shared bundle at runtime):
 
 ```bash
 kvlite-redis --path ./data --driver leveldb --listen 127.0.0.1:6379 --password "$KVLITE_PASSWORD"

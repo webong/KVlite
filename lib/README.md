@@ -19,13 +19,20 @@ control.
 | [`../MODULES.md`](../MODULES.md) | Standalone module manifest, discovery, and verification contract | core module catalog |
 
 Run `make release RELEASE_VERSION=v0.1.0 DRIVER=leveldb` (or `DRIVER=rocksdb`)
-on a native target to create one storage-driver extension bundle:
+on a native target to create one storage-driver extension bundle, and
+`make release-http` / `make release-redis` for the standalone protocol
+executable bundles:
 
 ```text
 dist/v0.1.0/<os>-<arch>/drivers/<driver>/
-├── bin/kvlite[.exe]
+├── bin/kvlite[.exe]                  # extension-free host by default
 ├── include/kvlite.h
 ├── lib/libkvlite.{so,dylib}  # kvlite.dll on Windows
+├── kvlite-module.json
+└── SHA256SUMS
+
+dist/v0.1.0/<os>-<arch>/modules/{http,redis}/
+├── bin/kvlite-{http,redis}[.exe]    # no statically linked storage driver
 ├── kvlite-module.json
 └── SHA256SUMS
 ```
@@ -47,7 +54,9 @@ platform's loader paths, and include their license notices.
 
 The C shared-library artifact is intentionally embedded-only. The driver
 bundle's `kvlite-module.json` makes its checksummed artifacts discoverable by
-the generic module catalog. The separately installed HTTP and Redis extensions
-already use the same metadata contract; the current CLI links them for
-convenience while standalone executable transport artifacts are the next
-loader milestone.
+the generic module catalog, and the installed HTTP and Redis extensions use the
+same metadata contract as executable modules. The default CLI links neither
+protocol extension (built with `kvlite_no_linked_extensions`); it launches a
+verified standalone executable instead. A linked CLI with both protocols is
+only a development convenience (`--linked-extensions`), not the release
+profile.

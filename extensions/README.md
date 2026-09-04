@@ -25,8 +25,11 @@ db, err := kvlite.Open("./data", kvlite.WithDriver("leveldb"))
 
 Each extension publishes the same `kvlite-module.json` contract used by
 standalone native bundles. The metadata describes a module but does not start a
-listener, load an artifact, or select a local database path by itself. You can
-execute an installed standalone module artifact with:
+listener, load an artifact, or select a local database path by itself. The
+HTTP and Redis standalone executables are installable bundles built with
+`make release-http` / `make release-redis` (no statically linked storage
+driver; the executable opens an installed driver C-shared module at runtime).
+You can execute an installed standalone module artifact with:
 
 ```bash
 kvlite module run redis -- --path ./data --listen 127.0.0.1:6379
