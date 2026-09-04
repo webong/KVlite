@@ -1,4 +1,4 @@
-.PHONY: test test-race test-rocksdb test-rocksdb-docker test-rocksdb-compat test-berkeleydb test-bindings-docker test-bindings-leveldb vet build-cli build-c-shared release release-cli release-c-shared
+.PHONY: test test-race test-rocksdb test-rocksdb-docker test-rocksdb-compat test-berkeleydb test-bindings-docker test-bindings-leveldb vet build-cli build-c-shared release release-cli release-c-shared release-berkeleydb
 
 RELEASE_VERSION ?= dev
 RELEASE_TARGET ?= $(shell go env GOHOSTOS)-$(shell go env GOHOSTARCH)
@@ -71,3 +71,7 @@ release-cli:
 
 release-c-shared:
 	bash ./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --driver "$(DRIVER)" --component c-shared
+
+release-berkeleydb:
+	ALLOW_BERKELEYDB_BUNDLE=1 \
+	./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --driver berkeleydb --allow-berkeleydb

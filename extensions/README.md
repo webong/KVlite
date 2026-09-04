@@ -35,9 +35,9 @@ kvlite module run redis -- --path ./data --listen 127.0.0.1:6379
 See
 [the module contract](../MODULES.md).
 
-Berkeley DB is importable only as an explicit CGo extension. It is excluded
-from default bundles and requires a Berkeley DB distribution the application
-owner is entitled to use.
+Berkeley DB is importable only as an explicit CGo extension. It is excluded from
+the standard release workflow and requires a Berkeley DB distribution the
+application owner is entitled to use.
 
 Each implemented nested module is versioned independently. New release tags
 use paths such as `extensions/leveldb/v0.1.0` and

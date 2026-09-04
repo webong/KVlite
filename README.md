@@ -443,6 +443,16 @@ make release RELEASE_VERSION=v0.1.0 DRIVER=leveldb
 make release RELEASE_VERSION=v0.1.0 DRIVER=rocksdb
 ```
 
+For Berkeley DB distributions where the owner has accepted the license terms,
+build a private bundle explicitly:
+
+```bash
+make release-berkeleydb RELEASE_VERSION=v0.1.0 \
+  ALLOW_BERKELEYDB_BUNDLE=1 \
+  CGO_CFLAGS="-I/opt/bdb/include" \
+  CGO_LDFLAGS="-L/opt/bdb/lib -ldb"
+```
+
 This emits the CLI, the platform shared library, the reviewed `kvlite.h` ABI
 header, and `SHA256SUMS` under
 `dist/v0.1.0/<os>-<arch>/drivers/<driver>/`. Because RocksDB is a cgo/C++
@@ -457,10 +467,10 @@ binding compatibility. It does not reflect the source layout: all optional Go
 modules—including RocksDB and LevelDB—live under [`extensions/`](extensions/).
 
 The initial build produces native artifact candidates rather than a
-self-contained installer: RocksDB and its compression-library runtime files
-are not bundled yet. The release packaging phase must bundle those files,
-relocate their loader paths, and publish their license notices before the
-binary downloads are suitable for clean machines.
+self-contained installer: Berkeley DB and RocksDB runtime files, plus
+compression libraries, are not bundled yet. The release packaging phase must
+bundle those files, relocate their loader paths, and publish their license
+notices before the binary downloads are suitable for clean machines.
 
 ## Optional multi-process sharing
 

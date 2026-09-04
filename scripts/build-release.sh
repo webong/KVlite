@@ -17,7 +17,9 @@ Build KVLite artifacts for the current native platform.
 Options:
   --version VERSION       Release version used in dist/VERSION (default: dev)
   --target OS-ARCH        Native target, such as darwin-arm64 (default: host)
-  --driver NAME           Driver bundle: rocksdb or leveldb (default: rocksdb)
+  --driver NAME           Driver bundle: rocksdb, leveldb, or berkeleydb (default: rocksdb)
+  --allow-berkeleydb      Enable Berkeley DB release bundle build. This requires an explicit
+                          license-reviewed decision from the bundle owner.
   --component NAME        Build cli or c-shared; repeat to choose both
   --help                  Show this help
 
@@ -35,7 +37,11 @@ fail() {
 version="dev"
 target="$(go env GOHOSTOS)-$(go env GOHOSTARCH)"
 driver="rocksdb"
+allow_berkeleydb=0
 components=()
+if [[ "${ALLOW_BERKELEYDB_BUNDLE:-0}" == "1" ]]; then
+  allow_berkeleydb=1
+fi
 
 while (($# > 0)); do
   case "$1" in
@@ -53,6 +59,10 @@ while (($# > 0)); do
       (($# >= 2)) || fail "--driver requires a value"
       driver="$2"
       shift 2
+      ;;
+    --allow-berkeleydb)
+      allow_berkeleydb=1
+      shift 1
       ;;
     --component)
       (($# >= 2)) || fail "--component requires a value"
@@ -81,9 +91,13 @@ case "$driver" in
     native_driver=0
     ;;
   berkeleydb)
-    fail "Berkeley DB bundles are deliberately excluded from the standard release workflow; build a private, license-reviewed bundle with make build-cli or make build-c-shared"
+    if [[ "$allow_berkeleydb" != "1" ]]; then
+      fail "Berkeley DB bundles are deliberately excluded from the standard release workflow; add --allow-berkeleydb and keep license obligations explicit"
+    fi
+    build_tags="berkeleydb,kvlite_berkeleydb"
+    native_driver=1
     ;;
-  *) fail "unsupported driver: $driver (expected rocksdb or leveldb)" ;;
+  *) fail "unsupported driver: $driver (expected rocksdb, leveldb, or berkeleydb)" ;;
 esac
 
 case "$target" in
@@ -197,10 +211,15 @@ write_module_manifest() {
     printf '  "driver": "%s",\n' "$driver"
     if [[ "$driver" == "rocksdb" ]]; then
       printf '  "capabilities": ["embedded-storage", "ttl-compaction"],\n'
+      printf '  "license": "Apache-2.0",\n'
     else
       printf '  "capabilities": ["embedded-storage"],\n'
+      if [[ "$driver" == "berkeleydb" ]]; then
+        printf '  "license": "LicenseRef-Oracle-BerkeleyDB-separate-distribution",\n'
+      else
+        printf '  "license": "Apache-2.0",\n'
+      fi
     fi
-    printf '  "license": "Apache-2.0",\n'
     printf '  "artifacts": [\n'
     if has_component cli; then
       artifact_hash="$(hash_for "bin/$executable_name")"
