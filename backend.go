@@ -3,6 +3,7 @@ package kvlite
 import (
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -270,28 +271,120 @@ func resolveLinkedDriverOrReportModule(name DriverName) (DriverName, registeredD
 	return "", registeredDriver{}, fmt.Errorf("%w: installed driver %q has a runtime module at %s that is not linked into this process", ErrDriverNotLoaded, name, module.Manifest.Name)
 }
 
+func resolveModuleDriver(name DriverName) (Module, error) {
+	module, err := ResolveModule(string(name))
+	if err != nil {
+		return Module{}, err
+	}
+	if module.Manifest.Kind != ModuleKindDriver {
+		return Module{}, fmt.Errorf("%w: installed module %q is not a driver module", ErrDriverNotLoaded, name)
+	}
+	if _, err := module.ArtifactForCurrentPlatform(ModuleArtifactCShared); err != nil {
+		return Module{}, fmt.Errorf("%w: installed driver %q is available, but this binary did not load its adapter: %v", ErrDriverNotLoaded, name, err)
+	}
+	if err := module.Verify(); err != nil {
+		return Module{}, fmt.Errorf("%w: installed driver %q cannot be loaded: %v", ErrDriverNotLoaded, name, err)
+	}
+	return module, nil
+}
+
+func driverFromModule(module Module) (registeredDriver, error) {
+	driver, err := normalizeDriverName(module.Manifest.Driver)
+	if err != nil {
+		return registeredDriver{}, err
+	}
+	version := strings.TrimSpace(module.Manifest.Version)
+	if version == "" {
+		version = "unknown"
+	}
+	return registeredDriver{
+		info: DriverInfo{
+			Driver:         driver,
+			Backend:        Backend(driver),
+			Implementation: module.Manifest.Name,
+			Format:         version,
+			Version:        version,
+			Available:      true,
+		},
+	}, nil
+}
+
 func openConfiguredEngine(path string, cfg config) (Engine, Backend, error) {
 	name, registered, err := resolveLinkedDriverOrReportModule(cfg.driver)
-	if err != nil {
-		return nil, "", err
-	}
-	if err := registered.driver.Available(); err != nil {
-		return nil, "", fmt.Errorf("kvlite: open driver %q: %w", name, err)
-	}
+	if err == nil {
+		if err := registered.driver.Available(); err != nil {
+			return nil, "", fmt.Errorf("kvlite: open driver %q: %w", name, err)
+		}
 
-	legacyManifest, err := prepareBackendManifest(path, registered, !cfg.driverExplicit && name == DriverRocksDB)
-	if err != nil {
-		return nil, "", err
-	}
-	storage, err := registered.driver.Open(path, cfg.driverOptions())
-	if err != nil {
-		return nil, "", err
-	}
-	if legacyManifest {
-		if err := createBackendManifest(path, registered); err != nil {
-			_ = storage.Close()
+		legacyManifest, err := prepareBackendManifest(path, registered, !cfg.driverExplicit && name == DriverRocksDB)
+		if err != nil {
 			return nil, "", err
 		}
+		storage, err := registered.driver.Open(path, cfg.driverOptions())
+		if err != nil {
+			return nil, "", err
+		}
+		if legacyManifest {
+			if err := createBackendManifest(path, registered); err != nil {
+				_ = storage.Close()
+				return nil, "", err
+			}
+		}
+		return storage, Backend(name), nil
 	}
-	return storage, Backend(name), nil
+
+	if !errors.Is(err, ErrDriverNotInstalled) && !errors.Is(err, ErrDriverNotLoaded) {
+		return nil, "", err
+	}
+
+	module, moduleErr := resolveModuleDriver(cfg.driver)
+	if moduleErr != nil {
+		if errors.Is(moduleErr, ErrModuleNotInstalled) {
+			return nil, "", fmt.Errorf("%w: %q", ErrDriverNotInstalled, cfg.driver)
+		}
+		return nil, "", moduleErr
+	}
+
+	fromModule, err := driverFromModule(module)
+	if err != nil {
+		return nil, "", err
+	}
+
+	storage, err := openModuleDriver(path, module, cfg.driverOptions())
+	if err != nil {
+		return nil, "", err
+	}
+	if err := createBackendManifestIfNotExists(path, fromModule); err != nil {
+		_ = storage.Close()
+		return nil, "", err
+	}
+	return storage, Backend(fromModule.info.Driver), nil
+}
+
+func createBackendManifestIfNotExists(path string, fromModule registeredDriver) error {
+	_, found, err := readBackendManifest(path)
+	if err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return fmt.Errorf("kvlite: inspect database directory: %w", err)
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf(
+			"%w: %q is non-empty and has no %s; migrate it into a new KVLite directory instead of selecting %q",
+			ErrBackendManifestMissing,
+			path,
+			backendManifestFile,
+			fromModule.info.Backend,
+		)
+	}
+	return createBackendManifest(path, fromModule)
+}
+
+func openModuleDriver(path string, module Module, options DriverOptions) (Engine, error) {
+	return openModuleDriverFromArtifact(path, module, options)
 }

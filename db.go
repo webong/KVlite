@@ -26,9 +26,9 @@ type DB struct {
 // Open opens or creates a KVLite database using a driver linked into this
 // process. Import a driver extension package (for example extensions/rocksdb
 // or extensions/leveldb) and select it with WithDriver.
-// Prebuilt artifact discovery is exposed separately through the module catalog;
-// this build still requires a linked adapter in-process, while module manifests
-// provide explicit runtime-installation hints.
+// Prebuilt artifact discovery is exposed separately through the module catalog.
+// If a runtime c-shared driver module is installed and verified, KVLite can
+// open it directly without requiring the driver package in-process.
 //
 // RocksDB remains the compatibility default.
 func Open(path string, options ...Option) (*DB, error) {

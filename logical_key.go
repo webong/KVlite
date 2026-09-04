@@ -1,6 +1,9 @@
 package kvlite
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // deleteLogicalKey removes every record that can make up one logical KVLite
 // key. Scalar writes use it before storing their replacement so a protocol
@@ -25,6 +28,9 @@ func (db *DB) deleteLogicalKey(ctx context.Context, key string) (bool, error) {
 			keys = append(keys, append([]byte(nil), storageKey...))
 			return nil
 		}); err != nil {
+			if errors.Is(err, ErrDriverUnavailable) {
+				continue
+			}
 			return false, err
 		}
 	}
