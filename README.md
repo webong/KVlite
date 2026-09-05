@@ -51,6 +51,21 @@ import (
 db, err := kvlite.Open("./app-data", kvlite.WithDriver("rocksdb"))
 ```
 
+Trying out the API with zero installs needs no import at all: core ships one
+built-in driver, the ephemeral array-backed `memory` engine. Every `Open`
+gets a fresh, empty store and everything is lost on `Close` — it is for
+demos, tests, and throwaway work, never the system of record:
+
+```go
+db, err := kvlite.Open("./scratch", kvlite.WithDriver("memory"))
+```
+
+The explicit selection is deliberate: a bare `Open(path)` keeps the RocksDB
+compatibility default and fails loudly when that driver is missing, so core
+never silently hands real data to throwaway storage. (The CLI and bundles
+resolve their default separately and pick memory when it is the only engine
+around.)
+
 `extensions/leveldb` is pure Go. `extensions/rocksdb` needs the `rocksdb`
 build tag and the native library. `extensions/berkeleydb` is CGo-only and
 requires a separately chosen Berkeley DB distribution; the owner of a

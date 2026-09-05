@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -557,6 +559,41 @@ func TestServeStandaloneBothRequiresExplicitPorts(t *testing.T) {
 	// half a topology.
 	if got := run([]string{"serve", "--path", t.TempDir(), "--extension-mode", "standalone", "--listen", "127.0.0.1:0", "--redis-listen", "127.0.0.1:6379"}); got != 2 {
 		t.Fatalf("run(serve standalone both with :0) = %d, want 2", got)
+	}
+}
+
+func TestMemoryDriverAvailableWithoutLinkedDrivers(t *testing.T) {
+	// This binary links no storage driver, so the only registered engine is
+	// the built-in ephemeral one. The library keeps its explicit RocksDB
+	// compatibility default (a bare Open must never silently hand out
+	// throwaway storage), while an explicit memory selection works with
+	// zero installs and the CLI default resolves to memory.
+	drivers := kvlite.Drivers()
+	if len(drivers) != 1 {
+		t.Skip("linked drivers present; memory-only registry is shadowed")
+	}
+	if drivers[0].Driver != kvlite.DriverMemory || !drivers[0].Available {
+		t.Fatalf("sole linked driver = %#v, want an available memory driver", drivers[0])
+	}
+	if got := kvlite.DefaultDriver(); got != kvlite.DriverMemory {
+		t.Fatalf("DefaultDriver() = %q, want %q", got, kvlite.DriverMemory)
+	}
+	if _, err := kvlite.Open(t.TempDir()); !errors.Is(err, kvlite.ErrDriverNotInstalled) {
+		t.Fatalf("bare Open() = %v, want ErrDriverNotInstalled (compat default preserved)", err)
+	}
+	path := t.TempDir()
+	db, err := kvlite.Open(path, kvlite.WithDriver("memory"))
+	if err != nil {
+		t.Fatalf("Open(memory) = %v, want an ephemeral database", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if err := db.Put(ctx, "scratch", map[string]any{"n": 1}); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := db.Get(ctx, "scratch", &got); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -189,7 +189,9 @@ func BackendInfoFor(backend Backend) (BackendInfo, error) {
 // Open itself intentionally continues to request RocksDB by default. This
 // helper is for a driver-specific CLI or C shared-library bundle, where a
 // LevelDB-only build should make its one bundled driver useful without a
-// separate selector argument.
+// separate selector argument. A bare core binary resolves to the built-in
+// ephemeral memory driver here, which is why `kvlite serve` works with no
+// installs while library Open still demands an explicit choice.
 func DefaultDriver() DriverName {
 	if _, _, err := registeredDriverFor(DriverRocksDB); err == nil {
 		return DriverRocksDB
