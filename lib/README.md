@@ -51,11 +51,13 @@ make release-runtime RELEASE_VERSION=v0.1.0 DRIVER=rocksdb \
 ```
 
 This copies non-system runtime libraries (RocksDB, compression, C++
-runtime) into `lib/`, rewrites loader paths to the bundle (`@loader_path`
-on macOS, `$ORIGIN` on Linux via patchelf), re-signs Mach-O binaries, and
-checksums everything including `NOTICES/`. Linux needs `patchelf`;
-Windows runtime bundling is unsupported and fails explicitly. Verify the
-mechanism without native dependencies via `make test-bundle-runtime`.
+runtime) into the bundle, rewrites loader paths to it (`@loader_path`
+on macOS, `$ORIGIN` on Linux via patchelf, DLLs beside the binaries on
+Windows through application-directory-first lookup), re-signs Mach-O
+binaries, and checksums everything including `NOTICES/`. Linux needs
+`patchelf`; Windows needs `dumpbin` (MSVC) or `objdump` (MinGW) and still
+awaits runner proof. Verify the mechanism without native dependencies via
+`make test-bundle-runtime`.
 
 The on-disk `drivers/<driver>` bundle path is retained for compatibility with
 the first language-binding installers. It is a release-layout detail; all

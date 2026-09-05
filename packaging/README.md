@@ -97,6 +97,33 @@ root is usable as a single search path (see `MODULES.md`).
   separately, in which case the last package installed must verify the
   assembled tree.
 
+## Windows (zips, like SQLite)
+
+Windows gets no shell installer and no system package from this project —
+mirroring SQLite, which ships per-arch DLL and tools zips, built with MSVC,
+with published checksums and no installer. The Windows story for KVLite is
+the same shape:
+
+- Build on a native Windows runner (MSVC toolchain for CGO, Go 1.23+):
+  `make release DRIVER=rocksdb`, `make release-http`, `make release-redis`,
+  then `make dist-tarballs` — or zip the same tree; both unpack to the
+  identical layout. Publish the zips plus `.sha256` sidecars as release
+  assets.
+- Native dependencies need no path surgery: Windows looks in the
+  application's own folder first, so `--bundle-runtime` copies DLLs beside
+  the `.exe` files (`dumpbin` or `objdump` lists them). Users add one folder
+  (`bin/`) to `PATH` and everything — including `kvlite.dll` loaded by
+  language bindings — resolves. This path compiles but still awaits proof
+  on a real runner; `dumpbin -dependents` on the outputs is the check.
+- Install location: `%ProgramFiles%\KVLite` (per-machine) or
+  `%LocalAppData%\KVLite` (per-user), with `KVLITE_SYSTEM_MODULE_PATH`
+  pointing at its `lib\kvlite` catalog. `scripts/install.sh` runs under Git
+  Bash with `--target windows-amd64`; symlinks fall back to copies where
+  privileges are missing.
+- Community managers (winget, Chocolatey, Scoop) stay community efforts, as
+  with SQLite — the release zips plus checksums are the complete input
+  they need.
+
 ## Obligations that stay with the publisher
 
 - **Notices.** `--bundle-runtime` refuses to build without `--notice-file`

@@ -46,6 +46,23 @@ is_system_library_linux() {
   return 1
 }
 
+# Windows resolves DLLs from the loading application's own directory first,
+# so bundling there means copying dependencies next to each executable. No
+# path rewriting exists or is needed. DLLs backing the C shared library
+# itself resolve through the host process directory or PATH; shipping every
+# bundled DLL in bin/ means a single PATH entry covers the whole tree.
+is_system_library_windows() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    kernel32.dll|user32.dll|gdi32.dll|advapi32.dll|shell32.dll|ole32.dll|oleaut32.dll|\
+uuid.dll|comdlg32.dll|ws2_32.dll|wsock32.dll|wininet.dll|winhttp.dll|\
+crypt32.dll|bcrypt.dll|ncrypt.dll|secur32.dll|credui.dll|mswsock.dll|\
+comctl32.dll|shlwapi.dll|version.dll|winmm.dll|winspool.dll|imm32.dll|\
+usp10.dll|msimg32.dll|dwmapi.dll|uxtheme.dll|ntdll.dll|kernelbase.dll|\
+msvcrt.dll|ucrtbase.dll|api-ms-*|ext-ms-*) return 0 ;;
+  esac
+  return 1
+}
+
 case "$os" in
   darwin)
     command -v otool >/dev/null 2>&1 || fail "otool is required to bundle darwin runtime libraries"
@@ -56,7 +73,16 @@ case "$os" in
     command -v patchelf >/dev/null 2>&1 || fail "patchelf is required to bundle linux runtime libraries"
     ;;
   windows)
-    fail "runtime bundling on windows-amd64 needs a pinned CI runner with the MSVC toolchain; see lib/README.md"
+    # Untested on a Windows runner so far; the copy-beside-exe mechanism is
+    # standard loader behavior, but treat the first runner proof as required.
+    printf 'bundle-native-deps: WARNING: Windows bundling awaits runner proof; verify with dumpbin -dependents\n' >&2
+    if command -v dumpbin >/dev/null 2>&1; then
+      dep_tool="dumpbin"
+    elif command -v objdump >/dev/null 2>&1; then
+      dep_tool="objdump"
+    else
+      fail "dumpbin (MSVC) or objdump (MinGW) is required to bundle windows runtime libraries"
+    fi
     ;;
   *) fail "unsupported target: $target" ;;
 esac
@@ -98,11 +124,41 @@ dependencies_for_linux() {
   ldd "$1" 2>/dev/null | awk '/=>/ { print $3 } /^[^ ]+\.so/ { print $1 }' | grep -v '^$' || true
 }
 
+dependencies_for_windows() {
+  if [[ "$dep_tool" == "dumpbin" ]]; then
+    dumpbin /dependents "$1" 2>/dev/null | awk '/\.dll/ { for (i = 1; i <= NF; i++) if ($i ~ /\.dll$/i) print $i }' | sort -u
+  else
+    objdump -p "$1" 2>/dev/null | awk '/DLL Name:/ { print $NF }' | sort -u
+  fi
+}
+
+# Resolve a bare DLL name to a file: alongside the binary first, then PATH.
+resolve_windows_dll() {
+  local name="$1"
+  local beside="$2"
+  if [[ -f "$beside/$name" ]]; then
+    printf '%s/%s\n' "$beside" "$name"
+    return 0
+  fi
+  local dir
+  local saved_ifs="$IFS"
+  IFS=';'
+  for dir in $PATH; do
+    if [[ -f "$dir/$name" ]]; then
+      printf '%s/%s\n' "$dir" "$name"
+      IFS="$saved_ifs"
+      return 0
+    fi
+  done
+  IFS="$saved_ifs"
+  return 1
+}
+
 install_bundled_library() {
   local source="$1"
   local base
   base="$(basename "$source")"
-  local destination="$staging_dir/lib/$base"
+  local destination="$bundle_destination_dir/$base"
   if [[ -e "$destination" ]]; then
     local have want
     have="$(sha256_of "$destination")"
@@ -115,31 +171,59 @@ install_bundled_library() {
   printf 'bundle-native-deps: bundled %s\n' "$source" >&2
 }
 
+# Non-system dependencies land beside the binaries that load them: lib/ on
+# Unix (re-pointed with loader paths below), bin/ on Windows (found through
+# the application-directory-first search order).
+bundle_destination_dir="$staging_dir/lib"
+[[ "$os" == "windows" ]] && bundle_destination_dir="$staging_dir/bin"
+mkdir -p "$bundle_destination_dir"
+
+list_dependencies() {
+  case "$os" in
+    darwin) dependencies_for_darwin "$1" ;;
+    linux) dependencies_for_linux "$1" ;;
+    windows) dependencies_for_windows "$1" ;;
+  esac
+}
+
+is_system_dependency() {
+  case "$os" in
+    darwin) is_system_library_darwin "$1" ;;
+    linux) is_system_library_linux "$1" ;;
+    windows) is_system_library_windows "$1" ;;
+  esac
+}
+
 # Iterate to a fixpoint so transitive dependencies of bundled libraries are
 # bundled too. Ten rounds bound pathological cycles.
 for _ in $(seq 1 10); do
   added=0
   for binary in "${staged_binaries[@]}"; do
-    case "$os" in
-      darwin) deps="$(dependencies_for_darwin "$binary")" ;;
-      linux) deps="$(dependencies_for_linux "$binary")" ;;
-    esac
+    deps="$(list_dependencies "$binary")"
     while IFS= read -r dep; do
       [[ -n "$dep" ]] || continue
       case "$dep" in
         @loader_path*|@rpath*) continue ;;
       esac
-      case "$os" in
-        darwin) is_system_library_darwin "$dep" && continue ;;
-        linux) is_system_library_linux "$dep" && continue ;;
-      esac
+      # Windows reports bare DLL names; resolve them beside the binary,
+      # then through PATH.
+      if [[ "$os" == "windows" ]]; then
+        case "$dep" in
+          *[/\\]*) ;;
+          *)
+            resolved="$(resolve_windows_dll "$dep" "$(dirname "$binary")")" || fail "dependency $dep of $binary was not found beside it or on PATH"
+            dep="$resolved"
+            ;;
+        esac
+      fi
+      is_system_dependency "$dep" && continue
       [[ -f "$dep" ]] || fail "dependency $dep of $binary is not a file on disk"
-      before="$(ls "$staging_dir/lib" | wc -l)"
+      before="$(ls "$bundle_destination_dir" | wc -l)"
       install_bundled_library "$dep"
-      after="$(ls "$staging_dir/lib" | wc -l)"
+      after="$(ls "$bundle_destination_dir" | wc -l)"
       if [[ "$after" != "$before" ]]; then
         added=1
-        staged_binaries+=("$staging_dir/lib/$(basename "$dep")")
+        staged_binaries+=("$bundle_destination_dir/$(basename "$dep")")
       fi
     done <<< "$deps"
   done

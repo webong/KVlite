@@ -31,7 +31,9 @@ Options:
                           compression, C++ runtime) into the bundle and rewrite
                           loader paths to the bundle. Requires at least one
                           --notice-file for third-party license compliance.
-                          Linux needs patchelf; Windows is unsupported.
+                          Linux needs patchelf; Windows copies DLLs beside the
+                          binaries (app-directory-first lookup, awaiting
+                          runner proof).
   --notice-file PATH      Third-party license notice copied into NOTICES/;
                           repeat for each bundled runtime. Required with
                           --bundle-runtime.
