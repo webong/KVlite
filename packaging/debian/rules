@@ -1,0 +1,49 @@
+#!/usr/bin/make -f
+# Debian build for KVLite. Uses the repository's own release and install
+# scripts so the .deb contains exactly the verified layout (see
+# packaging/README.md). Only the pure-Go LevelDB driver is packaged here;
+# RocksDB needs its native toolchain and Berkeley DB stays excluded.
+
+export CGO_ENABLED = 1
+export KVLITE_VERSION = $(shell dpkg-parsechangelog -S Version | sed 's/-[^-]*$$//')
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	bash scripts/build-release.sh --version "$(KVLITE_VERSION)" --driver leveldb
+	bash scripts/build-release.sh --version "$(KVLITE_VERSION)" --extension http
+	bash scripts/build-release.sh --version "$(KVLITE_VERSION)" --extension redis
+
+override_dh_auto_install:
+	bash scripts/install.sh --prefix /usr --destdir debian/tmp \
+	  --version "$(KVLITE_VERSION)" --link-cli leveldb
+	mkdir -p debian/tmp/etc/profile.d
+	printf 'export KVLITE_SYSTEM_MODULE_PATH="/usr/lib/kvlite"\n' \
+	  > debian/tmp/etc/profile.d/kvlite.sh
+	mkdir -p debian/kvlite-leveldb debian/kvlite-http debian/kvlite-redis
+	# Driver package: the CLI, its catalog bundle, the C header, notices,
+	# and the discovery default. Only bin/kvlite belongs to this package;
+	# protocol links ship with their own packages below.
+	mkdir -p debian/kvlite-leveldb/usr/bin debian/kvlite-leveldb/usr/include \
+	  debian/kvlite-leveldb/usr/lib/kvlite debian/kvlite-leveldb/usr/share/doc \
+	  debian/kvlite-leveldb/etc
+	cp debian/tmp/usr/bin/kvlite debian/kvlite-leveldb/usr/bin/
+	cp debian/tmp/usr/include/kvlite.h debian/kvlite-leveldb/usr/include/
+	cp -R debian/tmp/usr/lib/kvlite/drivers debian/kvlite-leveldb/usr/lib/kvlite/
+	if [ -d debian/tmp/usr/share/doc/kvlite ]; then \
+	  cp -R debian/tmp/usr/share/doc/kvlite debian/kvlite-leveldb/usr/share/doc/; \
+	fi
+	cp -R debian/tmp/etc/* debian/kvlite-leveldb/etc/
+	# Protocol packages: their module bundles plus binary links.
+	for ext in http redis; do \
+	  mkdir -p debian/kvlite-$$ext/usr/bin debian/kvlite-$$ext/usr/lib/kvlite/modules; \
+	  cp debian/tmp/usr/bin/kvlite-$$ext debian/kvlite-$$ext/usr/bin/; \
+	  cp -R debian/tmp/usr/lib/kvlite/modules/$$ext debian/kvlite-$$ext/usr/lib/kvlite/modules/; \
+	  cp -R debian/tmp/etc debian/kvlite-$$ext/; \
+	done
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	bash scripts/test-bundle-runtime.sh
+endif

@@ -1,0 +1,16 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Source: https://github.com/webong/KVlite
+
+Files: *
+Copyright: KVLite contributors
+License: Apache-2.0
+ KVLite itself is Apache-2.0; see LICENSE in the source tree.
+ .
+ Per-bundle third-party notices install under
+ /usr/share/doc/kvlite/<bundle>/ when the bundle was built with
+ --bundle-runtime. On Debian systems the full license texts of linked
+ system libraries are also available under /usr/share/doc/<package>/.
+
+Files: packaging/debian/*
+Copyright: KVLite packagers
+License: Apache-2.0

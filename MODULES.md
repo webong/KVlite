@@ -51,6 +51,9 @@ KVLite searches only explicit locations:
 1. `KVLITE_MODULE_PATH`, a platform path-list;
 2. `KVLITE_HOME/modules`;
 3. `KVLITE_HOME/drivers`, retained for the existing driver-bundle layout.
+4. `KVLITE_SYSTEM_MODULE_PATH`, a platform path-list of read-only system
+   roots installed by a package manager; searched last so a user
+   installation always shadows the system one. See `packaging/README.md`.
 
 It never implicitly searches the current directory. Inspect an installation
 without executing it:

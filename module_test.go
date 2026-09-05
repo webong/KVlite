@@ -174,8 +174,10 @@ func TestDefaultModulePathsUsesConfiguredLocationsOnly(t *testing.T) {
 	first := filepath.Join(t.TempDir(), "first")
 	second := filepath.Join(t.TempDir(), "second")
 	home := t.TempDir()
+	system := filepath.Join(t.TempDir(), "system")
 	t.Setenv("KVLITE_MODULE_PATH", first+string(os.PathListSeparator)+second+string(os.PathListSeparator)+first)
 	t.Setenv("KVLITE_HOME", home)
+	t.Setenv("KVLITE_SYSTEM_MODULE_PATH", system)
 
 	paths := DefaultModulePaths()
 	want := []string{
@@ -183,6 +185,7 @@ func TestDefaultModulePathsUsesConfiguredLocationsOnly(t *testing.T) {
 		filepath.Clean(second),
 		filepath.Join(home, "modules"),
 		filepath.Join(home, "drivers"),
+		filepath.Clean(system),
 	}
 	if !slices.Equal(paths, want) {
 		t.Fatalf("DefaultModulePaths() = %#v, want %#v", paths, want)
@@ -285,6 +288,23 @@ func TestSourceModuleManifestsAreDiscoverable(t *testing.T) {
 	want := []string{"berkeleydb", "http", "leveldb", "redis", "rocksdb"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("source module names = %#v, want %#v", got, want)
+	}
+}
+
+func TestGroupedCatalogRootDiscoversDriversAndModules(t *testing.T) {
+	root := t.TempDir()
+	writeTestModuleManifest(t, filepath.Join(root, "drivers", "leveldb"), testExtensionManifest("leveldb"))
+	writeTestModuleManifest(t, filepath.Join(root, "modules", "http"), testExtensionManifest("http"))
+	modules, err := DiscoverModules(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(modules))
+	for _, module := range modules {
+		got = append(got, module.Manifest.Name)
+	}
+	if !slices.Equal(got, []string{"http", "leveldb"}) {
+		t.Fatalf("grouped catalog names = %#v, want [http leveldb]", got)
 	}
 }
 

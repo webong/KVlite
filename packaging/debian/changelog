@@ -1,0 +1,9 @@
+kvlite (0.1.0-1) unstable; urgency=medium
+
+  * Initial packaging: kvlite-leveldb driver bundle plus standalone
+    kvlite-http and kvlite-redis protocol modules. The installed CLI
+    discovers versioned, checksummed module catalogs at runtime; see
+    packaging/README.md. Set the package version from the release tag
+    before uploading.
+
+ -- KVLite packagers <packages@example.com>  Fri, 05 Sep 2026 00:00:00 +0000

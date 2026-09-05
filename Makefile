@@ -1,4 +1,4 @@
-.PHONY: test test-race test-rocksdb test-rocksdb-docker test-rocksdb-compat test-berkeleydb test-bindings-docker test-bindings-leveldb test-standalone-modules test-bundle-runtime vet build-cli build-c-shared release release-cli release-c-shared release-berkeleydb release-http release-redis release-runtime
+.PHONY: test test-race test-rocksdb test-rocksdb-docker test-rocksdb-compat test-berkeleydb test-bindings-docker test-bindings-leveldb test-standalone-modules test-bundle-runtime test-install-online vet build-cli build-c-shared release release-cli release-c-shared release-berkeleydb release-http release-redis release-runtime dist-tarballs install
 
 RELEASE_VERSION ?= dev
 RELEASE_TARGET ?= $(shell go env GOHOSTOS)-$(shell go env GOHOSTARCH)
@@ -105,3 +105,27 @@ test-bundle-runtime:
 #     RELEASE_NOTICES="third-party/NOTICE-rocksdb third-party/NOTICE-snappy"
 release-runtime:
 	bash ./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --driver "$(DRIVER)" --bundle-runtime $(foreach notice,$(RELEASE_NOTICES),--notice-file "$(notice)")
+
+# Install prebuilt release bundles into an FHS-style prefix. Build first
+# (make release ... release-http release-redis), then e.g.:
+#   make install INSTALL_PREFIX=/usr/local INSTALL_VERSION=v0.1.0
+#   DESTDIR=/tmp/stage make install   # for packagers
+INSTALL_PREFIX ?= /usr/local
+INSTALL_VERSION ?= $(RELEASE_VERSION)
+INSTALL_TARGET ?= $(RELEASE_TARGET)
+INSTALL_LINK_CLI ?= leveldb
+install:
+	bash ./scripts/install.sh --prefix "$(INSTALL_PREFIX)" \
+	  $(if $(INSTALL_DESTDIR),--destdir "$(INSTALL_DESTDIR)") \
+	  --version "$(INSTALL_VERSION)" --target "$(INSTALL_TARGET)" \
+	  --link-cli "$(INSTALL_LINK_CLI)"
+
+# Pack per-target release tarballs plus checksums for GitHub release assets
+# and the online installer, e.g.:
+#   make dist-tarballs RELEASE_VERSION=v0.1.0
+dist-tarballs:
+	bash ./scripts/make-release-tarballs.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)"
+
+# End-to-end online-installer check against a local asset server.
+test-install-online:
+	bash ./scripts/test-install-online.sh

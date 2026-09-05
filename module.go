@@ -165,6 +165,9 @@ func LinkedModule(name string) (Module, error) {
 // paths are supplied. KVLITE_MODULE_PATH is a platform path-list of module
 // roots. KVLITE_HOME/modules is preferred; KVLITE_HOME/drivers is retained as
 // a compatibility location for the existing driver-bundle layout.
+// KVLITE_SYSTEM_MODULE_PATH is a platform path-list of read-only system roots
+// installed by a package manager (for example /usr/local/lib/kvlite); it is
+// searched last so a user installation always shadows the system one.
 //
 // The current working directory and arbitrary library search paths are never
 // searched implicitly. Applications should supply an explicit module path when
@@ -179,6 +182,9 @@ func DefaultModulePaths() []string {
 			filepath.Join(home, "modules"),
 			filepath.Join(home, "drivers"),
 		)
+	}
+	if system := os.Getenv("KVLITE_SYSTEM_MODULE_PATH"); system != "" {
+		paths = append(paths, filepath.SplitList(system)...)
 	}
 	return uniqueModulePaths(paths)
 }
@@ -450,12 +456,37 @@ func discoverModulesAt(root string) ([]Module, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		module, found, err := readModuleAt(filepath.Join(root, entry.Name()))
+		child := filepath.Join(root, entry.Name())
+		module, found, err := readModuleAt(child)
 		if err != nil {
 			return nil, err
 		}
 		if found {
 			modules = append(modules, module)
+			continue
+		}
+		// Release trees group bundles under drivers/ and modules/
+		// subdirectories (see scripts/install.sh). Descend exactly one
+		// level into those conventional grouping directories so a catalog
+		// root stays usable as a single search path.
+		if entry.Name() != "drivers" && entry.Name() != "modules" {
+			continue
+		}
+		nested, err := os.ReadDir(child)
+		if err != nil {
+			return nil, fmt.Errorf("kvlite: read module path %q: %w", child, err)
+		}
+		for _, nestedEntry := range nested {
+			if !nestedEntry.IsDir() {
+				continue
+			}
+			module, found, err := readModuleAt(filepath.Join(child, nestedEntry.Name()))
+			if err != nil {
+				return nil, err
+			}
+			if found {
+				modules = append(modules, module)
+			}
 		}
 	}
 	return modules, nil

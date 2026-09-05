@@ -1,0 +1,32 @@
+Source: kvlite
+Section: database
+Priority: optional
+Maintainer: KVLite packagers <packages@example.com>
+Build-Depends: debhelper-compat (= 13), golang-go (>= 1.23), ca-certificates
+Standards-Version: 4.6.2
+Homepage: https://github.com/webong/KVlite
+Rules-Requires-Root: no
+
+Package: kvlite-leveldb
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: KVLite engine-neutral key-value store (LevelDB driver)
+ KVLite core with the pure-Go LevelDB storage driver, installed as a
+ versioned, checksummed module catalog plus an extension-free host CLI.
+ .
+ Set KVLITE_SYSTEM_MODULE_PATH=/usr/lib/kvlite (installed by default in
+ /etc/profile.d/kvlite.sh) and run `kvlite serve` or `kvlite module list`.
+
+Package: kvlite-http
+Architecture: any
+Depends: kvlite-leveldb | kvlite-rocksdb, ${shlibs:Depends}, ${misc:Depends}
+Description: KVLite standalone JSON/HTTP protocol module
+ The kvlite-http executable module: a direct owner or an HTTP owner for
+ attached Redis processes. Needs one installed kvlite driver package.
+
+Package: kvlite-redis
+Architecture: any
+Depends: kvlite-leveldb | kvlite-rocksdb, ${shlibs:Depends}, ${misc:Depends}
+Description: KVLite standalone Redis-compatible protocol module
+ The kvlite-redis executable module: a direct owner or an attached process
+ over an HTTP owner. Needs one installed kvlite driver package.

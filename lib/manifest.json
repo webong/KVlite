@@ -4,7 +4,7 @@
   "cAbiVersion": 1,
   "moduleAbiVersion": 1,
   "moduleManifest": "kvlite-module.json",
-  "moduleSearchPaths": ["KVLITE_MODULE_PATH", "KVLITE_HOME/modules", "KVLITE_HOME/drivers"],
+  "moduleSearchPaths": ["KVLITE_MODULE_PATH", "KVLITE_HOME/modules", "KVLITE_HOME/drivers", "KVLITE_SYSTEM_MODULE_PATH"],
   "nativeModuleAbi": {
     "header": "capi/kvlite_module.h",
     "version": 1,

@@ -15,6 +15,8 @@ env:
 jobs:
   native-artifacts:
     name: ${{ matrix.target }}
+    permissions:
+      contents: write # attach release tarballs on tags
     strategy:
       fail-fast: false
       matrix:
@@ -135,6 +137,23 @@ jobs:
           # CLI and C ABI plus bundled native dependencies and NOTICES.
           export KVLITE_HOME="$PWD/dist/$version/${{ matrix.target }}"
           ./dist/"$version"/"${{ matrix.target }}"/drivers/rocksdb/bin/kvlite module verify rocksdb
+
+      - name: Pack and publish release tarballs
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF_TYPE}" != 'tag' ]]; then
+            version="dev-${GITHUB_SHA:0:12}"
+          fi
+          make dist-tarballs RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}"
+          cp scripts/install-online.sh dist/kvlite-installer.sh
+          if [[ "${GITHUB_REF_TYPE}" == 'tag' ]]; then
+            gh release upload "${GITHUB_REF_NAME}" \
+              dist/kvlite-*.tar.gz dist/kvlite-*.tar.gz.sha256 dist/kvlite-installer.sh \
+              --clobber
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - uses: actions/upload-artifact@v4
         with:
