@@ -4,6 +4,24 @@
 **Repository baseline inspected:** `main` at `c842cbe` (`origin/main`), clean
 before this handoff document was added
 
+> **Status 2026-09-05: closed.** Every phase below landed on `main`
+> (commits `20a4cee` and `6941ce9`, pushed). What changed versus the plan:
+> Phase 1–2 shipped as specified, plus a latent layering bug the work exposed
+> (engine operations routed through logical C ABI calls; fixed with additive
+> raw `kvlite_raw_*` symbols). Phase 4 shipped as an HTTP-owner/attached-Redis
+> topology with CLI orchestration instead of a new IPC wire protocol.
+> Phase 5 shipped as the frozen `kvlite_module_init_v1` ABI
+> (`capi/kvlite_module.h`) with a pure-C reference module. Self-contained
+> installs shipped as `--bundle-runtime` plus license-notice gating.
+> One behavior the plan assumed did not survive contact with reality:
+> loaded Go shared libraries are never unloaded (a Go runtime cannot be torn
+> down safely; `dlclose` hung the process), so module libraries stay mapped
+> for the process lifetime. Residual, all tracked outside this document:
+> CI runs the new suites (wired, awaiting runner proof), the first real
+> RocksDB runtime bundle is unproven until native CI runs it, Windows runtime
+> bundling is explicitly unsupported, and release signing (beyond checksums)
+> is still open.
+
 ## Purpose
 
 Finish KVLite's extension-first distribution model without changing the

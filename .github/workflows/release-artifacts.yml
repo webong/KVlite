@@ -98,9 +98,43 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" != 'tag' ]]; then
             version="dev-${GITHUB_SHA:0:12}"
           fi
-          go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./drivers/rocksdb/... ./extensions/http/... ./extensions/redis/... ./examples/basic
+          go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/... ./examples/basic
           make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=rocksdb
           make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=leveldb
+          make release-http RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}"
+          make release-redis RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}"
+
+      - name: Standalone extension integration (LevelDB)
+        shell: bash
+        run: make test-standalone-modules
+
+      - name: Self-contained RocksDB runtime bundle
+        shell: bash
+        run: |
+          notices="${RUNNER_TEMP}/runtime-notices"
+          bash ./scripts/collect-runtime-notices.sh "${RUNNER_TEMP}/rocksdb-source" "${notices}"
+          notice_args=()
+          for notice in "${notices}"/*; do
+            notice_args+=(--notice-file "$notice")
+          done
+          version="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF_TYPE}" != 'tag' ]]; then
+            version="dev-${GITHUB_SHA:0:12}"
+          fi
+          if [[ "${RUNNER_OS}" == 'Linux' ]]; then
+            sudo apt-get update && sudo apt-get install --yes patchelf
+            export LD_LIBRARY_PATH="${KVLITE_ROCKSDB_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          else
+            export DYLD_LIBRARY_PATH="${KVLITE_ROCKSDB_PREFIX}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+          fi
+          export CGO_CFLAGS="-I${KVLITE_ROCKSDB_PREFIX}/include"
+          export CGO_LDFLAGS="-L${KVLITE_ROCKSDB_PREFIX}/lib"
+          bash ./scripts/build-release.sh --version "$version" --target "${{ matrix.target }}" \
+            --driver rocksdb --bundle-runtime "${notice_args[@]}"
+          # The runtime bundle supersedes the plain RocksDB bundle above: same
+          # CLI and C ABI plus bundled native dependencies and NOTICES.
+          export KVLITE_HOME="$PWD/dist/$version/${{ matrix.target }}"
+          ./dist/"$version"/"${{ matrix.target }}"/drivers/rocksdb/bin/kvlite module verify rocksdb
 
       - uses: actions/upload-artifact@v4
         with:
