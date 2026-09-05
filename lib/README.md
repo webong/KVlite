@@ -41,6 +41,22 @@ The output directory is intentionally ignored by Git. A release is assembled
 by CI from the artifacts produced on each native operating-system/architecture
 runner, then its checksums are published with the release.
 
+For a self-contained driver bundle that runs without system-wide native
+installs, add `--bundle-runtime` with the third-party license notices it
+requires:
+
+```bash
+make release-runtime RELEASE_VERSION=v0.1.0 DRIVER=rocksdb \
+  RELEASE_NOTICES="third-party/NOTICE-rocksdb third-party/NOTICE-snappy"
+```
+
+This copies non-system runtime libraries (RocksDB, compression, C++
+runtime) into `lib/`, rewrites loader paths to the bundle (`@loader_path`
+on macOS, `$ORIGIN` on Linux via patchelf), re-signs Mach-O binaries, and
+checksums everything including `NOTICES/`. Linux needs `patchelf`;
+Windows runtime bundling is unsupported and fails explicitly. Verify the
+mechanism without native dependencies via `make test-bundle-runtime`.
+
 The on-disk `drivers/<driver>` bundle path is retained for compatibility with
 the first language-binding installers. It is a release-layout detail; all
 optional source modules, including drivers, live under `extensions/`.

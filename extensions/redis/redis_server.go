@@ -77,6 +77,42 @@ func Serve(db *kvlite.DB, options Options) (*Server, error) {
 	if db.Backend() == kvlite.BackendRemote {
 		return nil, fmt.Errorf("%w: a remote database cannot own a Redis server", kvlite.ErrInvalidArgument)
 	}
+	server, err := listen(options)
+	if err != nil {
+		return nil, err
+	}
+	server.wg.Add(1)
+	go server.acceptLoop(newDatabase(db.Protocol()), options)
+	return server, nil
+}
+
+// ServeRemote starts a Redis-compatible RESP server whose record store is a
+// remote KVLite database, typically from kvlitehttp.Connect to an HTTP owner
+// that holds the single writable copy of a driver directory. The owner stays
+// the only process allowed to open that directory; this server translates
+// RESP commands into the owner's record protocol.
+//
+// Remote multi-step commands are not atomic: each record operation crosses
+// the transport separately. Use Serve against an embedded owner when commands
+// must observe one coherent snapshot. Closing the server never closes the
+// caller-owned remote handle.
+func ServeRemote(db *kvlite.DB, options Options) (*Server, error) {
+	if db == nil {
+		return nil, fmt.Errorf("%w: database is required", kvlite.ErrInvalidArgument)
+	}
+	if !db.IsRemote() {
+		return nil, fmt.Errorf("%w: ServeRemote requires a remote database from Connect (use Serve for an embedded owner)", kvlite.ErrInvalidArgument)
+	}
+	server, err := listen(options)
+	if err != nil {
+		return nil, err
+	}
+	server.wg.Add(1)
+	go server.acceptLoop(newDatabase(db.Protocol()), options)
+	return server, nil
+}
+
+func listen(options Options) (*Server, error) {
 	if options.ListenAddress == "" {
 		options.ListenAddress = "127.0.0.1:6379"
 	}
@@ -95,8 +131,6 @@ func Serve(db *kvlite.DB, options Options) (*Server, error) {
 	if options.MaxClients > 0 {
 		server.sem = make(chan struct{}, options.MaxClients)
 	}
-	server.wg.Add(1)
-	go server.acceptLoop(newDatabase(db.Protocol()), options)
 	return server, nil
 }
 

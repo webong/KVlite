@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -10,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/webong/kvlite"
 )
@@ -123,10 +126,16 @@ func run(args []string) int {
 	}
 
 	if mode == extensionModeStandalone {
-		if *redisListen != "" && *listen != "" && httpListenExplicit {
-			fmt.Fprintln(os.Stderr, "kvlite: extension-mode=standalone cannot run HTTP and Redis simultaneously in one process")
-			fmt.Fprintln(os.Stderr, "Use --listen with linked mode for HTTP+Redis, or run one standalone extension binary directly.")
-			return 1
+		if *redisListen != "" && httpListenExplicit {
+			return runServeStandaloneBoth(
+				*path,
+				*driver,
+				*listen,
+				*token,
+				*maxRequestBytes,
+				*redisListen,
+				*redisPassword,
+			)
 		}
 		if *redisListen == "" {
 			return runServeStandaloneHTTP(
@@ -147,9 +156,15 @@ func run(args []string) int {
 			return 1
 		}
 		if *redisListen != "" && httpListenExplicit {
-			fmt.Fprintln(os.Stderr, "kvlite: extension-mode=auto cannot run HTTP and Redis simultaneously in one process")
-			fmt.Fprintln(os.Stderr, "Start one linked protocol or use --extension-mode=standalone for per-protocol processes.")
-			return 1
+			return runServeStandaloneBoth(
+				*path,
+				*driver,
+				*listen,
+				*token,
+				*maxRequestBytes,
+				*redisListen,
+				*redisPassword,
+			)
 		}
 		if *redisListen != "" && !isRedisExtensionLinked() {
 			return runServeStandaloneRedis(*path, *driver, *redisListen, *redisPassword)
@@ -169,6 +184,9 @@ func run(args []string) int {
 		return 1
 	}
 	defer db.Close()
+	if *redisListen != "" && !isRedisExtensionLinked() {
+		return runServeLinkedHTTPWithAttachedRedis(db, *listen, *token, *maxRequestBytes, driverPaths.items, *redisListen, *redisPassword)
+	}
 	var redisServer linkedRedisServer
 	redisURL := ""
 	if *redisListen != "" {
@@ -269,6 +287,231 @@ func runServeStandaloneRedis(path, driver, listen, password string) int {
 	}
 	fmt.Println("kvlite: starting standalone Redis module")
 	return runModuleRun(args)
+}
+
+// runServeStandaloneBoth serves HTTP and Redis from one database directory
+// through two standalone processes in a shared-owner topology: a kvlite-http
+// owner holds the single writable copy of the directory, and a kvlite-redis
+// process attaches to it over the owner's loopback HTTP protocol. The owner
+// must outlive the attached process; when the attached process exits, the
+// owner is stopped and its exit status is returned.
+func runServeStandaloneBoth(path, driver, listen, token string, maxRequestBytes int64, redisListen, redisPassword string) int {
+	if strings.TrimSpace(path) == "" {
+		fmt.Fprintln(os.Stderr, "kvlite: --path is required")
+		return 2
+	}
+	if err := requireExplicitServePort(listen, "--listen"); err != nil {
+		return 2
+	}
+	if err := requireExplicitServePort(redisListen, "--redis-listen"); err != nil {
+		return 2
+	}
+	ownerArgs := []string{
+		"--path", path,
+		"--listen", listen,
+		"--max-request-bytes", strconv.FormatInt(maxRequestBytes, 10),
+	}
+	if driver != "" {
+		ownerArgs = append(ownerArgs, "--driver", driver)
+	}
+	if token != "" {
+		ownerArgs = append(ownerArgs, "--token", token)
+	}
+	fmt.Println("kvlite: starting standalone HTTP owner module")
+	owner, err := startModuleProcess("http", ownerArgs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
+		return 1
+	}
+	ownerURL := "http://" + listen
+	if !waitForOwnerHealth(ownerURL, token, owner) {
+		// The health waiter already reaped the owner; Kill is a no-op if the
+		// process is gone.
+		_ = owner.Process.Kill()
+		return 1
+	}
+	attachedArgs := []string{
+		"--upstream", ownerURL,
+		"--listen", redisListen,
+	}
+	if token != "" {
+		attachedArgs = append(attachedArgs, "--upstream-token", token)
+	}
+	if driver != "" {
+		attachedArgs = append(attachedArgs, "--upstream-driver", driver)
+	}
+	if redisPassword != "" {
+		attachedArgs = append(attachedArgs, "--password", redisPassword)
+	}
+	fmt.Println("kvlite: starting standalone Redis module attached to the HTTP owner")
+	attached, err := startModuleProcess("redis", attachedArgs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
+		_ = owner.Process.Kill()
+		return 1
+	}
+	status := waitForAttachedModule(owner, attached)
+	return status
+}
+
+// runServeLinkedHTTPWithAttachedRedis serves the linked HTTP extension
+// in-process and attaches a standalone Redis module to it. It covers the
+// mixed build where HTTP is linked but Redis is only installed.
+func runServeLinkedHTTPWithAttachedRedis(db *kvlite.DB, listen, token string, maxRequestBytes int64, driverPaths map[kvlite.DriverName]string, redisListen, redisPassword string) int {
+	if err := requireExplicitServePort(redisListen, "--redis-listen"); err != nil {
+		return 2
+	}
+	server, err := linkedHTTPServe(db, linkedHTTPServeConfig{
+		listenAddress:   listen,
+		bearerToken:     token,
+		maxRequestBytes: maxRequestBytes,
+		driverPaths:     driverPaths,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
+		return 1
+	}
+	defer func() {
+		if err := server.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "kvlite: http extension close failed: %v\n", err)
+		}
+	}()
+	attachedArgs := []string{
+		"--upstream", server.URL(),
+		"--listen", redisListen,
+	}
+	if token != "" {
+		attachedArgs = append(attachedArgs, "--upstream-token", token)
+	}
+	if backend := db.Backend(); backend != "" && backend != kvlite.BackendRemote {
+		attachedArgs = append(attachedArgs, "--upstream-driver", string(backend))
+	}
+	if redisPassword != "" {
+		attachedArgs = append(attachedArgs, "--password", redisPassword)
+	}
+	fmt.Println("kvlite: starting standalone Redis module attached to the linked HTTP server")
+	attached, err := startModuleProcess("redis", attachedArgs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
+		return 1
+	}
+	fmt.Printf("driver=%s\n", db.Backend())
+	fmt.Printf("http=%s\n", server.URL())
+	fmt.Println("kvlite: serving; press Ctrl-C to stop")
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case sig := <-signals:
+			_ = attached.Process.Signal(sig)
+		case <-stop:
+		}
+	}()
+	if err := attached.Wait(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if status := exitErr.ProcessState.ExitCode(); status > 0 {
+				return status
+			}
+		}
+		fmt.Fprintf(os.Stderr, "kvlite: attached redis module exited with error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// requireExplicitServePort rejects ephemeral (:0) and unparsable addresses.
+// An orchestrated owner/attached pair addresses each other by URL, which the
+// parent cannot discover from child stdout, so both listeners need explicit
+// ports. Single-protocol mode keeps its :0 default.
+func requireExplicitServePort(address, flagName string) error {
+	_, port, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil || strings.TrimSpace(port) == "" || port == "0" {
+		fmt.Fprintf(os.Stderr, "kvlite: %s needs an explicit host:port when HTTP and Redis serve together (got %q)\n", flagName, address)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("kvlite: %s needs an explicit host:port", flagName)
+	}
+	return nil
+}
+
+// waitForOwnerHealth polls the owner's health endpoint until it answers or
+// the owner process exits. It reports false when the owner never becomes
+// ready so the caller can stop waiting and surface the owner's own logs.
+func waitForOwnerHealth(ownerURL, token string, owner *exec.Cmd) bool {
+	exited := make(chan struct{})
+	go func() {
+		_, _ = owner.Process.Wait()
+		close(exited)
+	}()
+	client := &http.Client{Timeout: 5 * time.Second}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-exited:
+			fmt.Fprintln(os.Stderr, "kvlite: HTTP owner module exited before becoming ready")
+			return false
+		default:
+		}
+		request, err := http.NewRequest(http.MethodGet, ownerURL+"/v1/health", nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
+			return false
+		}
+		if token != "" {
+			request.Header.Set("Authorization", "Bearer "+token)
+		}
+		response, err := client.Do(request)
+		if err == nil {
+			response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				return true
+			}
+		}
+		select {
+		case <-exited:
+			fmt.Fprintln(os.Stderr, "kvlite: HTTP owner module exited before becoming ready")
+			return false
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	fmt.Fprintln(os.Stderr, "kvlite: HTTP owner module did not become ready in time")
+	return false
+}
+
+// waitForAttachedModule waits for the attached Redis process while forwarding
+// signals to both children. The owner is always stopped before returning.
+func waitForAttachedModule(owner, attached *exec.Cmd) int {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case sig := <-signals:
+			_ = attached.Process.Signal(sig)
+			_ = owner.Process.Signal(sig)
+		case <-stop:
+		}
+	}()
+	waitErr := attached.Wait()
+	// The health waiter reaps the owner in the background; Kill stops a live
+	// owner and is a no-op otherwise.
+	_ = owner.Process.Kill()
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			if status := exitErr.ProcessState.ExitCode(); status > 0 {
+				return status
+			}
+		}
+		fmt.Fprintf(os.Stderr, "kvlite: attached redis module exited with error: %v\n", waitErr)
+		return 1
+	}
+	return 0
 }
 
 type driverPathValues struct {
@@ -418,6 +661,27 @@ func printModule(module kvlite.Module, source string) {
 	fmt.Printf("%s\tkind=%s\tversion=%s\tsource=%s\tpath=%s\n", manifest.Name, manifest.Kind, manifest.Version, source, module.Directory)
 }
 
+// startModuleProcess resolves, verifies, and starts an installed executable
+// module without waiting for it. The caller owns the returned process.
+func startModuleProcess(name string, subargs []string) (*exec.Cmd, error) {
+	module, artifact, err := kvlite.ResolveModuleExecutable(name)
+	if err != nil {
+		return nil, err
+	}
+	artifactPath, err := module.ArtifactPath(artifact)
+	if err != nil {
+		return nil, fmt.Errorf("kvlite: module %s artifact path error: %w", name, err)
+	}
+	cmd := exec.Command(artifactPath, subargs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("kvlite: start module %q: %w", name, err)
+	}
+	return cmd, nil
+}
+
 func runModuleRun(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Usage: kvlite module run <name> [args]")
@@ -425,22 +689,9 @@ func runModuleRun(args []string) int {
 	}
 	name := args[0]
 	subargs := args[1:]
-	module, artifact, err := kvlite.ResolveModuleExecutable(name)
+	cmd, err := startModuleProcess(name, subargs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
-		return 1
-	}
-	artifactPath, err := module.ArtifactPath(artifact)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "kvlite: module %s artifact path error: %v\n", name, err)
-		return 1
-	}
-	cmd := exec.Command(artifactPath, subargs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "kvlite: start module %q: %v\n", name, err)
 		return 1
 	}
 
@@ -475,7 +726,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       kvlite driver list")
 	fmt.Fprintln(os.Stderr, "       kvlite module list|run <name> [args...]|verify [NAME]")
 	fmt.Fprintln(os.Stderr, "\nDefaults prefer linked extensions, and fall back to standalone module binaries when auto-linked extensions are missing.")
-	fmt.Fprintln(os.Stderr, "In standalone mode, only one protocol extension owns the database at a time: HTTP or Redis.")
+	fmt.Fprintln(os.Stderr, "Standalone HTTP and Redis share one database through a shared-owner topology: a kvlite-http owner holds the directory and kvlite-redis attaches over the owner's loopback protocol. Serving both together needs explicit --listen and --redis-listen ports.")
 	fmt.Fprintln(os.Stderr, "The binary can discover installed module descriptors from KVLITE_MODULE_PATH or KVLITE_HOME/{modules,drivers}; listing them never loads code.")
 	fmt.Fprintln(os.Stderr, "Build a driver bundle with -tags kvlite_rocksdb,rocksdb; -tags kvlite_leveldb; or -tags kvlite_berkeleydb,berkeleydb, then inspect it with `kvlite driver list`.")
 }

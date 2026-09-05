@@ -8,10 +8,9 @@ This is the linked Go implementation. Its `kvlite-module.json` uses the same
 catalog contract as drivers, so a standalone executable form can be installed and
 discovered without compiling a host application. Standalone mode is a direct
 owner: the `kvlite-http` process opens its own database directory itself and
-serves exactly one protocol surface. Run one standalone HTTP *or* one
-standalone Redis process per database directory; sharing one directory between
-two standalone transports needs a future shared-owner IPC design. See
-[the module contract](../../MODULES.md).
+serves exactly one protocol surface. It can also own a directory on behalf of
+an attached Redis process (`kvlite-redis --upstream`), which is how HTTP and
+Redis serve the same data. See [the module contract](../../MODULES.md).
 
 There is also a standalone entrypoint that is shipped as an installable
 executable module (no statically linked storage driver; it opens an installed

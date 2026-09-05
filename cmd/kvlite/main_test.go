@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/webong/kvlite"
+	kvliteredis "github.com/webong/kvlite/extensions/redis"
 )
 
 func withLinkedExtensionProbes(t *testing.T, httpLinked, redisLinked bool) func() {
@@ -445,9 +447,182 @@ func main() {
 	}
 }
 
-func TestServeStandaloneModeRejectsHTTPAndRedisTogether(t *testing.T) {
-	if got := run([]string{"serve", "--path", t.TempDir(), "--extension-mode", "standalone", "--listen", "127.0.0.1:8089", "--redis-listen", "127.0.0.1:6379"}); got != 1 {
-		t.Fatalf("run(serve standalone both) = %d, want 1", got)
+func TestServeStandaloneModeRunsHTTPOwnerWithAttachedRedis(t *testing.T) {
+	if runtime.GOOS == "js" || runtime.GOOS == "wasip1" {
+		t.Skip("standalone module execution is not supported")
+	}
+	root := t.TempDir()
+	httpMarkerPath := filepath.Join(root, "serve-both-http-marker.txt")
+	redisMarkerPath := filepath.Join(root, "serve-both-redis-marker.txt")
+
+	ownerProgram := fmt.Sprintf(`
+package main
+
+import (
+	"flag"
+	"net/http"
+	"os"
+)
+
+func main() {
+	flags := flag.NewFlagSet("kvlite-http", flag.ContinueOnError)
+	path := flags.String("path", "", "")
+	listen := flags.String("listen", "", "")
+	_ = flags.String("driver", "", "")
+	_ = flags.String("token", "", "")
+	_ = flags.Int64("max-request-bytes", 0, "")
+	if err := flags.Parse(os.Args[1:]); err != nil {
+		panic(err)
+	}
+	if *path == "" || *listen == "" {
+		panic("path and listen are required")
+	}
+	if err := os.WriteFile(%q, []byte(*path), 0o600); err != nil {
+		panic(err)
+	}
+	http.HandleFunc("/v1/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(%q))
+	})
+	if err := http.ListenAndServe(*listen, nil); err != nil {
+		panic(err)
+	}
+}
+`, httpMarkerPath, `{"status":"ok"}`)
+	buildFakeModule(t, root, "http", []string{"http-client", "http-server"}, ownerProgram)
+
+	attachedProgram := fmt.Sprintf(`
+package main
+
+import (
+	"flag"
+	"fmt"
+	"net/http"
+	"os"
+)
+
+func main() {
+	flags := flag.NewFlagSet("kvlite-redis", flag.ContinueOnError)
+	upstream := flags.String("upstream", "", "")
+	_ = flags.String("listen", "", "")
+	_ = flags.String("upstream-token", "", "")
+	_ = flags.String("upstream-driver", "", "")
+	_ = flags.String("password", "", "")
+	if err := flags.Parse(os.Args[1:]); err != nil {
+		panic(err)
+	}
+	if *upstream == "" {
+		panic("upstream is required")
+	}
+	response, err := http.Get(*upstream + "/v1/health")
+	if err != nil {
+		panic(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		panic(fmt.Sprintf("owner status = %%s", response.Status))
+	}
+	if err := os.WriteFile(%q, []byte(*upstream), 0o600); err != nil {
+		panic(err)
+	}
+}
+`, redisMarkerPath)
+	buildFakeModule(t, root, "redis", []string{"redis-resp2", "redis-server"}, attachedProgram)
+
+	t.Setenv("KVLITE_MODULE_PATH", root)
+	t.Setenv("KVLITE_HOME", "")
+	dataPath := filepath.Join(root, "data")
+	ownerListen := "127.0.0.1:18091"
+	if got := run([]string{"serve", "--path", dataPath, "--extension-mode", "standalone", "--listen", ownerListen, "--redis-listen", "127.0.0.1:16391"}); got != 0 {
+		t.Fatalf("run(serve standalone both) = %d, want 0", got)
+	}
+	written, err := os.ReadFile(httpMarkerPath)
+	if err != nil {
+		t.Fatalf("owner http marker missing: %v", err)
+	}
+	if string(written) != dataPath {
+		t.Fatalf("owner http marker contains %q, want %q", string(written), dataPath)
+	}
+	written, err = os.ReadFile(redisMarkerPath)
+	if err != nil {
+		t.Fatalf("attached redis marker missing: %v", err)
+	}
+	if string(written) != "http://"+ownerListen {
+		t.Fatalf("attached redis marker contains %q, want %q", string(written), "http://"+ownerListen)
+	}
+}
+
+func TestServeStandaloneBothRequiresExplicitPorts(t *testing.T) {
+	// An ephemeral owner port cannot be discovered through child stdout, so
+	// the combined topology asks for explicit addresses instead of starting
+	// half a topology.
+	if got := run([]string{"serve", "--path", t.TempDir(), "--extension-mode", "standalone", "--listen", "127.0.0.1:0", "--redis-listen", "127.0.0.1:6379"}); got != 2 {
+		t.Fatalf("run(serve standalone both with :0) = %d, want 2", got)
+	}
+}
+
+func TestAttachedRedisRejectsEmbeddedOwner(t *testing.T) {
+	// Needs a real embedded database; run with -tags kvlite_leveldb.
+	db, err := kvlite.Open(t.TempDir(), kvlite.WithDriver("leveldb"))
+	if err != nil {
+		t.Skipf("leveldb driver is not linked into this test binary: %v", err)
+	}
+	defer db.Close()
+	if db.IsRemote() {
+		t.Fatal("embedded database is unexpectedly marked remote")
+	}
+	// The attached topology must refuse an embedded handle at the API
+	// boundary instead of serving a second owner for one directory.
+	if _, err := kvliteredis.ServeRemote(db, kvliteredis.Options{ListenAddress: "127.0.0.1:0"}); err == nil {
+		t.Fatal("ServeRemote over an embedded database unexpectedly succeeded")
+	}
+}
+
+// buildFakeModule compiles a small standalone program and publishes it as an
+// installed executable module for discovery through KVLITE_MODULE_PATH.
+func buildFakeModule(t *testing.T, root, name string, capabilities []string, program string) {
+	t.Helper()
+	directory := filepath.Join(root, name)
+	sourcePath := filepath.Join(directory, "main.go")
+	binaryName := "kvlite-" + name
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binaryPath := filepath.Join(directory, "bin", binaryName)
+	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte(program), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("go", "build", "-o", binaryPath, sourcePath).CombinedOutput(); err != nil {
+		t.Fatalf("go build %s module executable: %v: %s", name, err, out)
+	}
+	payload, err := os.ReadFile(binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksum := sha256.Sum256(payload)
+	capabilitiesJSON, err := json.Marshal(capabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{
+  "schema_version": 1,
+  "name": %q,
+  "kind": "extension",
+  "version": "v0.1.0",
+  "module_abi": 1,
+  "capabilities": %s,
+  "license": "Apache-2.0",
+  "artifacts": [{
+    "platform": "`+runtime.GOOS+`-`+runtime.GOARCH+`",
+    "kind": "executable",
+    "path": "bin/%s",
+    "sha256": "%s"
+  }]
+}`, name, capabilitiesJSON, binaryName, hex.EncodeToString(checksum[:]))
+	if err := os.WriteFile(filepath.Join(directory, kvlite.ModuleManifestFilename), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

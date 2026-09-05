@@ -101,13 +101,34 @@ called. This preserves the embedded-first default while the release layer
 gains standalone protocol artifacts.
 
 The standalone transport form is an executable module started explicitly by the
-caller. In this milestone, it owns its own `kvlite` database path directly in the
-process and does not yet use shared in-process IPC. Run one standalone HTTP
-*or* one standalone Redis process per database directory; two standalone
-transports must never own the same directory at once.
+caller. A standalone process is a direct owner when given `--path`: it opens
+its own `kvlite` database directory and does not yet use shared in-process
+IPC. Two direct owners must never open the same directory at once.
 
-This is sufficient for optional deployment shapes where HTTP or Redis is chosen as
-the single protocol surface for one CLI invocation.
+When HTTP and Redis must serve the *same* directory, use the shared-owner
+topology instead: one `kvlite-http` owner holds the single writable copy of
+the directory, and `kvlite-redis --upstream <owner-url>` attaches to it over
+the owner's loopback HTTP protocol. The owner must outlive attached
+processes; per-command failures (owner down, token rejected) surface as Redis
+`ERR` replies without stopping the server. Attached multi-step commands are
+not atomic — each record operation crosses the transport separately — so use a
+direct owner when commands must observe one coherent snapshot.
+
+```bash
+kvlite-http --path ./data --driver leveldb --listen 127.0.0.1:8089 --token "$KVLITE_TOKEN" &
+kvlite-redis --upstream http://127.0.0.1:8089 --upstream-token "$KVLITE_TOKEN" \
+  --upstream-driver leveldb --listen 127.0.0.1:6379
+```
+
+Or let one CLI orchestrate both processes (explicit ports required):
+
+```bash
+kvlite serve --path ./data --driver leveldb --extension-mode standalone \
+  --listen 127.0.0.1:8089 --redis-listen 127.0.0.1:6379
+```
+
+This is sufficient for optional deployment shapes where HTTP or Redis — or
+both, through one owner — is the protocol surface for one CLI invocation.
 
 This permits installed HTTP and Redis modules without relying on Go's
 toolchain-coupled `plugin` mechanism.
@@ -151,7 +172,11 @@ Set `KVLITE_HOME=<install-root>` with driver bundles beneath
 `<install-root>/modules/*`; the current `DefaultModulePaths` implementation
 discovers both. A protocol executable finds the requested driver's installed
 C-shared module and opens it through the runtime driver loader (CGO-enabled
-native builds). Verify everything before serving:
+native builds). Loaded driver libraries stay mapped for the process lifetime:
+a Go-built shared library starts its own runtime on load and cannot be torn
+down safely, so the host closes database handles but never unloads the
+library (the same permanence rule as native modules below). Verify everything
+before serving:
 
 ```bash
 kvlite module list
@@ -161,16 +186,56 @@ kvlite module verify redis
 kvlite serve --path ./data --driver leveldb --extension-mode standalone --listen 127.0.0.1:8080
 ```
 
-One current boundary: the v1 C embedding ABI exposes only
-put/get/delete, so a standalone protocol process that opens its driver through
-an installed C-shared module cannot serve operations that require key scans.
-In practice, standalone HTTP single-entry put/get works, and standalone Redis
-answers `PING` and owns its database path, but Redis data commands fail with a
-clear `does not expose scan` error. Full Redis data-plane coverage stays in
-linked mode until a scan-capable driver ABI exists; that, like shared-owner
-IPC, is a separate milestone, not a documentation claim.
+The C embedding ABI (v1) exposes logical put/get/delete plus raw engine
+operations (`kvlite_raw_put/get/delete`) and snapshot prefix scans
+(`kvlite_raw_scan_open/next/close`) as additive v1 symbols. A standalone
+protocol process opens its driver's installed C-shared module through the
+runtime driver loader and speaks the engine keyspace directly, so HTTP
+put/get/scan and the full Redis data plane (strings, hashes, sets, lists)
+work over installed driver modules. Hosts resolve the raw symbols as
+required; a bundle that predates them fails to load with a clear
+missing-symbol error instead of silently corrupting the keyspace.
 
-## Current release transition
+## Native in-process modules
+
+A driver can also load in-process through the frozen native-module ABI
+(`capi/kvlite_module.h`, v1). The shared library exports one entry point,
+`kvlite_module_init_v1`, receives a host-services table, and registers driver
+operation tables over the same engine keyspace as the raw C ABI. The host
+never unloads an initialized module and verifies its checksum before loading,
+like every other artifact kind. Any language that produces a C shared library
+can implement one; `capi/testdata/nativememdb/memdb.c` is a dependency-free C
+reference used by the loader tests. A driver module manifest for this kind
+looks like:
+
+```json
+{
+  "schema_version": 1,
+  "name": "memdb",
+  "kind": "driver",
+  "version": "v0.1.0",
+  "module_abi": 1,
+  "driver": "memdb",
+  "capabilities": ["embedded-storage"],
+  "license": "Apache-2.0",
+  "artifacts": [
+    {
+      "platform": "darwin-arm64",
+      "kind": "native-module",
+      "path": "memdb.dylib",
+      "sha256": "...",
+      "symbol": "kvlite_module_init_v1"
+    }
+  ]
+}
+```
+
+`Open` prefers a linked driver, then an installed C-shared bundle, then an
+installed native module; a missing driver still reports the usual
+actionable error. Go's toolchain-coupled `plugin` package remains
+unsupported by design.
+
+## Source layout
 
 All optional source modules now live under `extensions/*`: RocksDB, LevelDB,
 Berkeley DB, HTTP, and Redis. Linked Go modules

@@ -21,10 +21,17 @@ typedef int (*kvlite_open_with_driver_fn)(const char *, const char *, kvlite_han
 typedef int (*kvlite_open_with_backend_fn)(const char *, const char *, kvlite_handle_t *, char **);
 typedef int (*kvlite_open_fn)(const char *, kvlite_handle_t *, char **);
 typedef int (*kvlite_close_fn)(kvlite_handle_t, char **);
-typedef int (*kvlite_put_fn)(kvlite_handle_t, const void *, size_t, const void *, size_t, long long, char **);
-typedef int (*kvlite_get_fn)(kvlite_handle_t, const void *, size_t, void **, size_t *, char **);
-typedef int (*kvlite_delete_fn)(kvlite_handle_t, const void *, size_t, char **);
 typedef void (*kvlite_free_fn)(void *);
+// Raw record-store operations address the engine keyspace directly. They are
+// additive ABI v1 symbols; a bundle that predates them cannot serve a module
+// driver engine and is rejected with a clear missing-symbol error instead of
+// routing engine operations through the logical functions.
+typedef int (*kvlite_raw_put_fn)(kvlite_handle_t, const void *, size_t, const void *, size_t, char **);
+typedef int (*kvlite_raw_get_fn)(kvlite_handle_t, const void *, size_t, void **, size_t *, char **);
+typedef int (*kvlite_raw_delete_fn)(kvlite_handle_t, const void *, size_t, char **);
+typedef int (*kvlite_raw_scan_open_fn)(kvlite_handle_t, const void *, size_t, kvlite_handle_t *, char **);
+typedef int (*kvlite_raw_scan_next_fn)(kvlite_handle_t, void **, size_t *, void **, size_t *, char **);
+typedef int (*kvlite_raw_scan_close_fn)(kvlite_handle_t, char **);
 
 typedef struct {
 	void *library;
@@ -33,10 +40,13 @@ typedef struct {
 	kvlite_open_with_backend_fn open_with_backend;
 	kvlite_open_fn open;
 	kvlite_close_fn close;
-	kvlite_put_fn put;
-	kvlite_get_fn get;
-	kvlite_delete_fn delete;
 	kvlite_free_fn free_ptr;
+	kvlite_raw_put_fn raw_put;
+	kvlite_raw_get_fn raw_get;
+	kvlite_raw_delete_fn raw_delete;
+	kvlite_raw_scan_open_fn raw_scan_open;
+	kvlite_raw_scan_next_fn raw_scan_next;
+	kvlite_raw_scan_close_fn raw_scan_close;
 } kvlite_module_api;
 
 static void set_loader_error(char **out, const char *message) {
@@ -82,11 +92,13 @@ static void *kvlite_resolve_symbol(void *library, const char *name) {
 }
 
 static void kvlite_unload_library(void *library) {
-#ifdef _WIN32
-	FreeLibrary((HMODULE)library);
-#else
-	dlclose(library);
-#endif
+	// Intentionally never unloads: a Go-built shared library starts its own
+	// runtime on load, and that runtime cannot be torn down safely. Unmapping
+	// it while its threads still exist corrupts the host process (observed as
+	// unkillable CPU spin). The mapping is process-lifetime by design; the
+	// host keeps at most one per distinct driver bundle. Callers clear their
+	// handle below.
+	(void)library;
 }
 
 static void kvlite_module_unload(kvlite_module_api *api) {
@@ -124,9 +136,12 @@ static int kvlite_module_load(const char *path, kvlite_module_api *api, char **o
 
 	RESOLVE(abi_version, "kvlite_abi_version", kvlite_abi_version_fn);
 	RESOLVE(close, "kvlite_close", kvlite_close_fn);
-	RESOLVE(put, "kvlite_put", kvlite_put_fn);
-	RESOLVE(get, "kvlite_get", kvlite_get_fn);
-	RESOLVE(delete, "kvlite_delete", kvlite_delete_fn);
+	RESOLVE(raw_put, "kvlite_raw_put", kvlite_raw_put_fn);
+	RESOLVE(raw_get, "kvlite_raw_get", kvlite_raw_get_fn);
+	RESOLVE(raw_delete, "kvlite_raw_delete", kvlite_raw_delete_fn);
+	RESOLVE(raw_scan_open, "kvlite_raw_scan_open", kvlite_raw_scan_open_fn);
+	RESOLVE(raw_scan_next, "kvlite_raw_scan_next", kvlite_raw_scan_next_fn);
+	RESOLVE(raw_scan_close, "kvlite_raw_scan_close", kvlite_raw_scan_close_fn);
 	RESOLVE(free_ptr, "kvlite_free", kvlite_free_fn);
 
 #undef RESOLVE
@@ -180,25 +195,46 @@ static int kvlite_module_close(const kvlite_module_api *api, kvlite_handle_t han
 	return api->close(handle, out_error);
 }
 
-static int kvlite_module_put(const kvlite_module_api *api, kvlite_handle_t handle, const void *key, size_t key_length, const void *value, size_t value_length, long long ttl_seconds, char **out_error) {
-	if (api == NULL || api->put == NULL) {
+static int kvlite_module_raw_put(const kvlite_module_api *api, kvlite_handle_t handle, const void *key, size_t key_length, const void *value, size_t value_length, char **out_error) {
+	if (api == NULL || api->raw_put == NULL) {
 		return 1;
 	}
-	return api->put(handle, key, key_length, value, value_length, ttl_seconds, out_error);
+	return api->raw_put(handle, key, key_length, value, value_length, out_error);
 }
 
-static int kvlite_module_get(const kvlite_module_api *api, kvlite_handle_t handle, const void *key, size_t key_length, void **out_value, size_t *out_length, char **out_error) {
-	if (api == NULL || api->get == NULL) {
+static int kvlite_module_raw_get(const kvlite_module_api *api, kvlite_handle_t handle, const void *key, size_t key_length, void **out_value, size_t *out_length, char **out_error) {
+	if (api == NULL || api->raw_get == NULL) {
 		return 1;
 	}
-	return api->get(handle, key, key_length, out_value, out_length, out_error);
+	return api->raw_get(handle, key, key_length, out_value, out_length, out_error);
 }
 
-static int kvlite_module_delete(const kvlite_module_api *api, kvlite_handle_t handle, const void *key, size_t key_length, char **out_error) {
-	if (api == NULL || api->delete == NULL) {
+static int kvlite_module_raw_delete(const kvlite_module_api *api, kvlite_handle_t handle, const void *key, size_t key_length, char **out_error) {
+	if (api == NULL || api->raw_delete == NULL) {
 		return 1;
 	}
-	return api->delete(handle, key, key_length, out_error);
+	return api->raw_delete(handle, key, key_length, out_error);
+}
+
+static int kvlite_module_raw_scan_open(const kvlite_module_api *api, kvlite_handle_t handle, const void *prefix, size_t prefix_length, kvlite_handle_t *out_cursor, char **out_error) {
+	if (api == NULL || api->raw_scan_open == NULL) {
+		return 1;
+	}
+	return api->raw_scan_open(handle, prefix, prefix_length, out_cursor, out_error);
+}
+
+static int kvlite_module_raw_scan_next(const kvlite_module_api *api, kvlite_handle_t cursor, void **out_key, size_t *out_key_length, void **out_value, size_t *out_value_length, char **out_error) {
+	if (api == NULL || api->raw_scan_next == NULL) {
+		return 1;
+	}
+	return api->raw_scan_next(cursor, out_key, out_key_length, out_value, out_value_length, out_error);
+}
+
+static int kvlite_module_raw_scan_close(const kvlite_module_api *api, kvlite_handle_t cursor, char **out_error) {
+	if (api == NULL || api->raw_scan_close == NULL) {
+		return 1;
+	}
+	return api->raw_scan_close(cursor, out_error);
 }
 
 static void kvlite_module_free(const kvlite_module_api *api, void *pointer) {
@@ -297,7 +333,7 @@ func (library *moduleLibrary) close(handle uint64) error {
 	return nativeModuleStatusError(status, readCStringAndFree(cError), "close")
 }
 
-func (library *moduleLibrary) put(handle uint64, key, value []byte, ttlSeconds int64) error {
+func (library *moduleLibrary) put(handle uint64, key, value []byte) error {
 	var keyPointer unsafe.Pointer
 	if len(key) > 0 {
 		keyPointer = unsafe.Pointer(&key[0])
@@ -307,14 +343,13 @@ func (library *moduleLibrary) put(handle uint64, key, value []byte, ttlSeconds i
 		valuePointer = unsafe.Pointer(&value[0])
 	}
 	cError := (*C.char)(nil)
-	status := C.kvlite_module_put(
+	status := C.kvlite_module_raw_put(
 		library.state,
 		C.ulonglong(handle),
 		keyPointer,
 		C.size_t(len(key)),
 		valuePointer,
 		C.size_t(len(value)),
-		C.longlong(ttlSeconds),
 		&cError,
 	)
 	return nativeModuleStatusError(status, readCStringAndFree(cError), "put")
@@ -328,7 +363,7 @@ func (library *moduleLibrary) get(handle uint64, key []byte) ([]byte, error) {
 	var value unsafe.Pointer
 	var valueLength C.size_t
 	cError := (*C.char)(nil)
-	status := C.kvlite_module_get(
+	status := C.kvlite_module_raw_get(
 		library.state,
 		C.ulonglong(handle),
 		keyPointer,
@@ -358,8 +393,53 @@ func (library *moduleLibrary) delete(handle uint64, key []byte) error {
 		keyPointer = unsafe.Pointer(&key[0])
 	}
 	cError := (*C.char)(nil)
-	status := C.kvlite_module_delete(library.state, C.ulonglong(handle), keyPointer, C.size_t(len(key)), &cError)
+	status := C.kvlite_module_raw_delete(library.state, C.ulonglong(handle), keyPointer, C.size_t(len(key)), &cError)
 	return nativeModuleStatusError(status, readCStringAndFree(cError), "delete")
+}
+
+// scanPrefix streams one engine-keyspace prefix scan through a snapshot
+// cursor. The cursor is always closed before returning.
+func (library *moduleLibrary) scanPrefix(handle uint64, prefix []byte) ([][]byte, [][]byte, error) {
+	var prefixPointer unsafe.Pointer
+	if len(prefix) > 0 {
+		prefixPointer = unsafe.Pointer(&prefix[0])
+	}
+	var cCursor C.ulonglong
+	cError := (*C.char)(nil)
+	if status := C.kvlite_module_raw_scan_open(library.state, C.ulonglong(handle), prefixPointer, C.size_t(len(prefix)), &cCursor, &cError); status != 0 {
+		return nil, nil, nativeModuleStatusError(status, readCStringAndFree(cError), "scan open")
+	}
+	cursor := uint64(cCursor)
+	closeErr := func() error {
+		cCloseError := (*C.char)(nil)
+		status := C.kvlite_module_raw_scan_close(library.state, C.ulonglong(cursor), &cCloseError)
+		return nativeModuleStatusError(status, readCStringAndFree(cCloseError), "scan close")
+	}
+	var keys, values [][]byte
+	for {
+		var cKey, cValue unsafe.Pointer
+		var cKeyLength, cValueLength C.size_t
+		cNextError := (*C.char)(nil)
+		status := C.kvlite_module_raw_scan_next(library.state, C.ulonglong(cursor), &cKey, &cKeyLength, &cValue, &cValueLength, &cNextError)
+		if status == 1 {
+			// Exhausted: KVLITE_NOT_FOUND with no error text ends the scan.
+			break
+		}
+		if err := nativeModuleStatusError(status, readCStringAndFree(cNextError), "scan next"); err != nil {
+			_ = closeErr()
+			return nil, nil, err
+		}
+		key := C.GoBytes(cKey, C.int(cKeyLength))
+		C.kvlite_module_free(library.state, cKey)
+		value := C.GoBytes(cValue, C.int(cValueLength))
+		C.kvlite_module_free(library.state, cValue)
+		keys = append(keys, key)
+		values = append(values, value)
+	}
+	if err := closeErr(); err != nil {
+		return nil, nil, err
+	}
+	return keys, values, nil
 }
 
 func (library *moduleLibrary) unload() {
@@ -393,7 +473,7 @@ func (engine *moduleDriverEngine) Put(_ context.Context, key, value []byte) erro
 	if engine.closed {
 		return ErrClosed
 	}
-	return engine.library.put(engine.handle, key, value, 0)
+	return engine.library.put(engine.handle, key, value)
 }
 
 func (engine *moduleDriverEngine) Delete(_ context.Context, key []byte) error {
@@ -404,9 +484,19 @@ func (engine *moduleDriverEngine) Delete(_ context.Context, key []byte) error {
 }
 
 func (engine *moduleDriverEngine) ScanPrefix(_ context.Context, prefix []byte, callback func(key, value []byte) error) error {
-	_ = prefix
-	_ = callback
-	return fmt.Errorf("%w: native module backend does not expose scan", ErrDriverUnavailable)
+	if engine.closed {
+		return ErrClosed
+	}
+	keys, values, err := engine.library.scanPrefix(engine.handle, prefix)
+	if err != nil {
+		return err
+	}
+	for index := range keys {
+		if err := callback(keys[index], values[index]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (engine *moduleDriverEngine) Close() error {

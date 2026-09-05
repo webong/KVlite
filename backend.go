@@ -288,6 +288,30 @@ func resolveModuleDriver(name DriverName) (Module, error) {
 	return module, nil
 }
 
+// resolveNativeModuleDriver resolves an installed in-process native driver
+// module: kind driver with a native-module artifact exporting
+// kvlite_module_init_v1. It verifies checksums but never loads code.
+func resolveNativeModuleDriver(name DriverName) (Module, error) {
+	module, err := ResolveModule(string(name))
+	if err != nil {
+		return Module{}, err
+	}
+	if module.Manifest.Kind != ModuleKindDriver {
+		return Module{}, fmt.Errorf("%w: installed module %q is not a driver module", ErrDriverNotLoaded, name)
+	}
+	artifact, err := module.ArtifactForCurrentPlatform(ModuleArtifactNative)
+	if err != nil {
+		return Module{}, fmt.Errorf("%w: installed driver %q has no native-module artifact for this platform: %v", ErrDriverNotLoaded, name, err)
+	}
+	if artifact.Symbol != "kvlite_module_init_v1" {
+		return Module{}, fmt.Errorf("%w: native module %q names initialization symbol %q, want %q", ErrModuleIncompatible, module.Manifest.Name, artifact.Symbol, "kvlite_module_init_v1")
+	}
+	if err := module.Verify(); err != nil {
+		return Module{}, fmt.Errorf("%w: installed driver %q cannot be loaded: %v", ErrDriverNotLoaded, name, err)
+	}
+	return module, nil
+}
+
 func driverFromModule(module Module) (registeredDriver, error) {
 	driver, err := normalizeDriverName(module.Manifest.Driver)
 	if err != nil {
@@ -338,27 +362,62 @@ func openConfiguredEngine(path string, cfg config) (Engine, Backend, error) {
 	}
 
 	module, moduleErr := resolveModuleDriver(cfg.driver)
-	if moduleErr != nil {
-		if errors.Is(moduleErr, ErrModuleNotInstalled) {
-			return nil, "", fmt.Errorf("%w: %q", ErrDriverNotInstalled, cfg.driver)
+	if moduleErr == nil {
+		fromModule, err := driverFromModule(module)
+		if err != nil {
+			return nil, "", err
 		}
+
+		storage, err := openModuleDriver(path, module, cfg.driverOptions())
+		if err != nil {
+			return nil, "", err
+		}
+		if err := createBackendManifestIfNotExists(path, fromModule); err != nil {
+			_ = storage.Close()
+			return nil, "", err
+		}
+		return storage, Backend(fromModule.info.Driver), nil
+	}
+
+	// A driver module may ship a native-module artifact instead of (or in
+	// addition to) a C-shared bundle. Native modules load in-process through
+	// kvlite_module_init_v1; the C-shared path above keeps priority so
+	// existing bundles behave exactly as before.
+	nativeModule, nativeErr := resolveNativeModuleDriver(cfg.driver)
+	if nativeErr == nil {
+		fromModule, err := driverFromModule(nativeModule)
+		if err != nil {
+			return nil, "", err
+		}
+		storage, err := openNativeModuleDriver(path, nativeModule, cfg.driverOptions())
+		if err != nil {
+			return nil, "", err
+		}
+		// A native module may be memory-resident and never materialize the
+		// directory itself; the manifest beside the database is still the
+		// host's responsibility.
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			_ = storage.Close()
+			return nil, "", fmt.Errorf("kvlite: create database directory: %w", err)
+		}
+		if err := createBackendManifestIfNotExists(path, fromModule); err != nil {
+			_ = storage.Close()
+			return nil, "", err
+		}
+		return storage, Backend(fromModule.info.Driver), nil
+	}
+
+	// Prefer the most specific diagnosis: a native module that is present but
+	// broken (for example, an unknown init symbol) reports before the
+	// C-shared adapter complaint. When neither artifact kind is installed,
+	// preserve the original not-installed report.
+	if !errors.Is(nativeErr, ErrModuleNotInstalled) {
+		return nil, "", nativeErr
+	}
+	if !errors.Is(moduleErr, ErrModuleNotInstalled) {
 		return nil, "", moduleErr
 	}
-
-	fromModule, err := driverFromModule(module)
-	if err != nil {
-		return nil, "", err
-	}
-
-	storage, err := openModuleDriver(path, module, cfg.driverOptions())
-	if err != nil {
-		return nil, "", err
-	}
-	if err := createBackendManifestIfNotExists(path, fromModule); err != nil {
-		_ = storage.Close()
-		return nil, "", err
-	}
-	return storage, Backend(fromModule.info.Driver), nil
+	return nil, "", fmt.Errorf("%w: %q", ErrDriverNotInstalled, cfg.driver)
 }
 
 func createBackendManifestIfNotExists(path string, fromModule registeredDriver) error {

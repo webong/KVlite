@@ -97,8 +97,17 @@ kvlite serve --path ./data --extension-mode standalone --listen 127.0.0.1:8080
 kvlite serve --path ./data --extension-mode standalone --redis-listen 127.0.0.1:6379
 ```
 
-In standalone mode, only one protocol extension may own the database directory per
-CLI instance; choose either HTTP (default) or Redis.
+To serve one directory over both protocols, give both listeners and let the
+CLI orchestrate a shared owner (one HTTP owner plus one attached Redis):
+
+```bash
+kvlite serve --path ./data --extension-mode standalone \
+  --listen 127.0.0.1:8080 --redis-listen 127.0.0.1:6379
+```
+
+In standalone mode a `--path` process is a direct owner of its own database
+directory; two direct owners must never open the same directory. The
+owner/attached topology above is the supported way to share.
 
 HTTP and Redis expose the same module metadata model as storage drivers. Standalone
 binaries are built from their own Go modules without statically linking any
@@ -482,11 +491,14 @@ pinned in CI.
 binding compatibility. It does not reflect the source layout: all optional Go
 modules—including RocksDB and LevelDB—live under [`extensions/`](extensions/).
 
-The initial build produces native artifact candidates rather than a
-self-contained installer: Berkeley DB and RocksDB runtime files, plus
-compression libraries, are not bundled yet. The release packaging phase must
-bundle those files, relocate their loader paths, and publish their license
-notices before the binary downloads are suitable for clean machines.
+The default build produces native artifact candidates that reuse the target's
+installed runtimes. For clean-machine distribution, bundle the native
+dependencies with their loader paths and license notices:
+
+```bash
+make release-runtime RELEASE_VERSION=v0.1.0 DRIVER=rocksdb \
+  RELEASE_NOTICES="third-party/NOTICE-rocksdb third-party/NOTICE-snappy"
+```
 
 ## Optional multi-process sharing
 

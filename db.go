@@ -13,6 +13,11 @@ type DB struct {
 	engine  Engine
 	cfg     config
 	backend Backend
+	// remote is true for handles backed by a transport rather than a local
+	// storage driver (for example kvlitehttp.Connect). Remote handles share
+	// the typed API and protocol stores, but multi-step commands cross one
+	// request per record operation and are not atomic.
+	remote bool
 
 	mu sync.RWMutex
 	// protocolMu serializes multi-step optional protocol commands (for example
@@ -51,6 +56,9 @@ func Open(path string, options ...Option) (*DB, error) {
 // in-process adapters. Unlike Open, it does not choose a storage driver or
 // create a driver manifest; the returned DB takes ownership of and closes the
 // supplied Engine.
+//
+// A handle built this way is remote: it speaks to storage through a transport
+// (or test adapter) instead of owning a local driver directory. See IsRemote.
 func OpenWithEngine(storage Engine, backend Backend, options ...Option) (*DB, error) {
 	if storage == nil {
 		return nil, fmt.Errorf("%w: storage engine is required", ErrInvalidArgument)
@@ -63,7 +71,20 @@ func OpenWithEngine(storage Engine, backend Backend, options ...Option) (*DB, er
 	if err != nil {
 		return nil, err
 	}
-	return newDB(storage, cfg, Backend(canonicalBackend))
+	db, err := newDB(storage, cfg, Backend(canonicalBackend))
+	if err != nil {
+		return nil, err
+	}
+	db.remote = true
+	return db, nil
+}
+
+// IsRemote reports whether this handle reaches storage through a transport
+// rather than owning a local driver directory. Remote handles support the
+// same protocol stores, but multi-step commands are not atomic: each record
+// operation crosses the transport separately.
+func (db *DB) IsRemote() bool {
+	return db.remote
 }
 
 func buildConfig(options []Option) (config, error) {

@@ -234,3 +234,31 @@ func TestClosingServerLeavesEmbeddedOwnerOpen(t *testing.T) {
 		t.Fatalf("owner Put() after Server.Close() = %v", err)
 	}
 }
+
+func TestServeRemoteRejectsNilDatabase(t *testing.T) {
+	if _, err := ServeRemote(nil, Options{ListenAddress: "127.0.0.1:0"}); err == nil {
+		t.Fatal("ServeRemote(nil) unexpectedly succeeded")
+	}
+}
+
+func TestServeRemoteServesRemoteHandle(t *testing.T) {
+	db, err := kvlite.OpenWithEngine(newRedisTestEngine(), kvlite.BackendRemote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if !db.IsRemote() {
+		t.Fatal("OpenWithEngine handle is not marked remote")
+	}
+	server, err := ServeRemote(db, Options{ListenAddress: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	client := newRedisTestClient(t, server.URL()[len("redis://"):])
+	assertRedisSimple(t, client.do(t, "PING"), "PONG")
+	assertRedisSimple(t, client.do(t, "SET", "attached", "yes"), "OK")
+	assertRedisBulk(t, client.do(t, "GET", "attached"), "yes")
+	assertRedisInteger(t, client.do(t, "HSET", "profile", "name", "Ada"), 1)
+	assertRedisBulk(t, client.do(t, "HGET", "profile", "name"), "Ada")
+}

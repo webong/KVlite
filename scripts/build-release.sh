@@ -27,6 +27,14 @@ Options:
   --linked-extensions     Opt back into a CLI with linked HTTP/Redis extensions.
                           By default driver CLIs are built with kvlite_no_linked_extensions
                           so they launch verified standalone protocol executables.
+  --bundle-runtime        Copy non-system native runtime libraries (RocksDB,
+                          compression, C++ runtime) into the bundle and rewrite
+                          loader paths to the bundle. Requires at least one
+                          --notice-file for third-party license compliance.
+                          Linux needs patchelf; Windows is unsupported.
+  --notice-file PATH      Third-party license notice copied into NOTICES/;
+                          repeat for each bundled runtime. Required with
+                          --bundle-runtime.
   --help                  Show this help
 
 Supported targets: linux-amd64, linux-arm64, darwin-amd64, darwin-arm64,
@@ -47,12 +55,17 @@ driver_explicit=0
 extension=""
 allow_berkeleydb=0
 linked_extensions=0
+bundle_runtime=0
+notice_files=()
 components=()
 if [[ "${ALLOW_BERKELEYDB_BUNDLE:-0}" == "1" ]]; then
   allow_berkeleydb=1
 fi
 if [[ "${KVLITE_LINKED_EXTENSIONS:-0}" == "1" ]]; then
   linked_extensions=1
+fi
+if [[ "${KVLITE_BUNDLE_RUNTIME:-0}" == "1" ]]; then
+  bundle_runtime=1
 fi
 
 while (($# > 0)); do
@@ -81,6 +94,15 @@ while (($# > 0)); do
     --linked-extensions)
       linked_extensions=1
       shift 1
+      ;;
+    --bundle-runtime)
+      bundle_runtime=1
+      shift 1
+      ;;
+    --notice-file)
+      (($# >= 2)) || fail "--notice-file requires a value"
+      notice_files+=("$2")
+      shift 2
       ;;
     --allow-berkeleydb)
       allow_berkeleydb=1
@@ -272,6 +294,36 @@ if [[ "$is_extension_bundle" == "0" ]] && has_component c-shared; then
   cp "$temporary_dir/$library_name" "$staging_dir/lib/$library_name"
   cp "$repo_root/capi/kvlite.h" "$staging_dir/include/kvlite.h"
   files+=("lib/$library_name" "include/kvlite.h")
+fi
+
+if [[ "$bundle_runtime" == "1" ]]; then
+  if ((${#notice_files[@]} == 0)); then
+    fail "--bundle-runtime requires at least one --notice-file with third-party license notices"
+  fi
+  mkdir -p "$staging_dir/NOTICES"
+  for notice in "${notice_files[@]}"; do
+    [[ -f "$notice" ]] || fail "notice file does not exist: $notice"
+    cp "$notice" "$staging_dir/NOTICES/$(basename "$notice")"
+    files+=("NOTICES/$(basename "$notice")")
+  done
+  bash "$script_dir/bundle-native-deps.sh" "$staging_dir" "$target"
+  # Bundled runtime libraries join the checksummed closure. Entries already
+  # listed (such as libkvlite itself) are not duplicated.
+  if [[ -d "$staging_dir/lib" ]]; then
+    while IFS= read -r bundled; do
+      [[ -n "$bundled" ]] || continue
+      already_listed=0
+      for existing in "${files[@]}"; do
+        if [[ "$existing" == "$bundled" ]]; then
+          already_listed=1
+          break
+        fi
+      done
+      if [[ "$already_listed" == "0" ]]; then
+        files+=("$bundled")
+      fi
+    done < <(cd "$staging_dir/lib" && find . -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) | sed 's|^\./|lib/|' | sort)
+  fi
 fi
 
 (

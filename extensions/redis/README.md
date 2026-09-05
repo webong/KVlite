@@ -8,19 +8,36 @@ This is the linked Go implementation. Its `kvlite-module.json` uses the same
 catalog contract as drivers, so a standalone executable form can be installed
 and discovered without compiling a host application. Standalone mode is a
 direct owner: the `kvlite-redis` process opens its own database directory
-itself and serves exactly one protocol surface. Run one standalone Redis *or*
-one standalone HTTP process per database directory; sharing one directory
-between two standalone transports needs a future shared-owner IPC design. One
-further boundary: the v1 C embedding ABI exposes only put/get/delete, so a
-standalone Redis process that opens its driver through an installed C-shared
-module answers `PING` and owns its path but returns a clear scan-unsupported
-error for data commands. Full Redis data-plane coverage stays in linked mode
-until a scan-capable driver ABI exists. See
+itself and serves exactly one protocol surface. See
 [the module contract](../../MODULES.md).
+
+To serve the *same* directory as HTTP, attach to an HTTP owner instead of
+owning a directory. The owner holds the single writable copy; this process
+translates RESP into the owner's record protocol and never opens the
+directory:
+
+```bash
+kvlite-redis --upstream http://127.0.0.1:8089 --upstream-token "$KVLITE_TOKEN" \
+  --upstream-driver leveldb --listen 127.0.0.1:6379
+```
+
+Attached multi-step commands are not atomic (each record operation crosses
+the transport separately). In Go, `Serve` owns an embedded database while
+`ServeRemote` serves from a remote handle such as `kvlitehttp.Connect`:
+
+```go
+remote, err := kvlitehttp.Connect("http://127.0.0.1:8089", kvlitehttp.ClientOptions{
+    BearerToken: "local-secret",
+    Driver:      kvlite.DriverLevelDB,
+})
+server, err := kvliteredis.ServeRemote(remote, kvliteredis.Options{
+    ListenAddress: "127.0.0.1:6379",
+})
+```
 
 There is also a standalone entrypoint that is shipped as an installable
 executable module (no statically linked storage driver; it opens an installed
-driver C-shared bundle at runtime):
+driver C-shared or native module at runtime):
 
 ```bash
 kvlite-redis --path ./data --driver leveldb --listen 127.0.0.1:6379 --password "$KVLITE_PASSWORD"

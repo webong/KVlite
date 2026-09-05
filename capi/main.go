@@ -28,6 +28,18 @@ var databases = struct {
 	items map[uint64]*kvlite.DB
 }{items: make(map[uint64]*kvlite.DB), next: 1}
 
+type scanSnapshot struct {
+	keys   [][]byte
+	values [][]byte
+	next   int
+}
+
+var cursors = struct {
+	sync.Mutex
+	next  uint64
+	items map[uint64]*scanSnapshot
+}{items: make(map[uint64]*scanSnapshot), next: 1}
+
 const (
 	statusOK       = C.int(0)
 	statusNotFound = C.int(1)
@@ -240,4 +252,159 @@ func kvlite_delete(handle C.ulonglong, key unsafe.Pointer, keyLength C.size_t, o
 //export kvlite_free
 func kvlite_free(pointer unsafe.Pointer) {
 	C.free(pointer)
+}
+
+func rawStore(handle C.ulonglong, out **C.char) (kvlite.TransportStore, C.int) {
+	db := lookup(handle, out)
+	if db == nil {
+		return nil, statusInvalid
+	}
+	return db.Transport(), statusOK
+}
+
+//export kvlite_raw_put
+func kvlite_raw_put(handle C.ulonglong, key unsafe.Pointer, keyLength C.size_t, value unsafe.Pointer, valueLength C.size_t, outError **C.char) C.int {
+	store, status := rawStore(handle, outError)
+	if store == nil {
+		return status
+	}
+	keyBytes, err := inputBytes(key, keyLength)
+	if err != nil {
+		return statusFor(err, outError)
+	}
+	if len(keyBytes) == 0 {
+		return statusFor(fmt.Errorf("%w: key is required", kvlite.ErrInvalidArgument), outError)
+	}
+	valueBytes, err := inputBytes(value, valueLength)
+	if err != nil {
+		return statusFor(err, outError)
+	}
+	return statusFor(store.Put(context.Background(), keyBytes, valueBytes), outError)
+}
+
+//export kvlite_raw_get
+func kvlite_raw_get(handle C.ulonglong, key unsafe.Pointer, keyLength C.size_t, outValue *unsafe.Pointer, outLength *C.size_t, outError **C.char) C.int {
+	store, status := rawStore(handle, outError)
+	if store == nil {
+		return status
+	}
+	if outValue == nil || outLength == nil {
+		return statusFor(fmt.Errorf("%w: output value and length are required", kvlite.ErrInvalidArgument), outError)
+	}
+	keyBytes, err := inputBytes(key, keyLength)
+	if err != nil {
+		return statusFor(err, outError)
+	}
+	if len(keyBytes) == 0 {
+		return statusFor(fmt.Errorf("%w: key is required", kvlite.ErrInvalidArgument), outError)
+	}
+	value, found, err := store.Get(context.Background(), keyBytes)
+	if err != nil {
+		return statusFor(err, outError)
+	}
+	if !found {
+		return statusFor(kvlite.ErrNotFound, outError)
+	}
+	// The caller owns this allocation and releases it with kvlite_free.
+	*outValue = C.CBytes(value)
+	*outLength = C.size_t(len(value))
+	return statusOK
+}
+
+//export kvlite_raw_delete
+func kvlite_raw_delete(handle C.ulonglong, key unsafe.Pointer, keyLength C.size_t, outError **C.char) C.int {
+	store, status := rawStore(handle, outError)
+	if store == nil {
+		return status
+	}
+	keyBytes, err := inputBytes(key, keyLength)
+	if err != nil {
+		return statusFor(err, outError)
+	}
+	if len(keyBytes) == 0 {
+		return statusFor(fmt.Errorf("%w: key is required", kvlite.ErrInvalidArgument), outError)
+	}
+	return statusFor(store.Delete(context.Background(), keyBytes), outError)
+}
+
+//export kvlite_raw_scan_open
+func kvlite_raw_scan_open(handle C.ulonglong, prefix unsafe.Pointer, prefixLength C.size_t, outCursor *C.ulonglong, outError **C.char) C.int {
+	store, status := rawStore(handle, outError)
+	if store == nil {
+		return status
+	}
+	if outCursor == nil {
+		return statusFor(fmt.Errorf("%w: output cursor is required", kvlite.ErrInvalidArgument), outError)
+	}
+	prefixBytes, err := inputBytes(prefix, prefixLength)
+	if err != nil {
+		return statusFor(err, outError)
+	}
+	snapshot := &scanSnapshot{}
+	if err := store.ScanPrefix(context.Background(), prefixBytes, func(key, value []byte) error {
+		snapshot.keys = append(snapshot.keys, append([]byte(nil), key...))
+		snapshot.values = append(snapshot.values, append([]byte(nil), value...))
+		return nil
+	}); err != nil {
+		return statusFor(err, outError)
+	}
+	cursors.Lock()
+	cursor := cursors.next
+	cursors.next++
+	cursors.items[cursor] = snapshot
+	cursors.Unlock()
+	*outCursor = C.ulonglong(cursor)
+	return statusOK
+}
+
+func lookupCursor(cursor C.ulonglong, out **C.char) *scanSnapshot {
+	cursors.Lock()
+	snapshot := cursors.items[uint64(cursor)]
+	cursors.Unlock()
+	if snapshot == nil {
+		setError(out, fmt.Errorf("%w: invalid scan cursor %d", kvlite.ErrInvalidArgument, uint64(cursor)))
+	}
+	return snapshot
+}
+
+//export kvlite_raw_scan_next
+func kvlite_raw_scan_next(cursor C.ulonglong, outKey *unsafe.Pointer, outKeyLength *C.size_t, outValue *unsafe.Pointer, outValueLength *C.size_t, outError **C.char) C.int {
+	snapshot := lookupCursor(cursor, outError)
+	if snapshot == nil {
+		return statusInvalid
+	}
+	if outKey == nil || outKeyLength == nil || outValue == nil || outValueLength == nil {
+		return statusFor(fmt.Errorf("%w: output key, value, and lengths are required", kvlite.ErrInvalidArgument), outError)
+	}
+	cursors.Lock()
+	if snapshot.next >= len(snapshot.keys) {
+		cursors.Unlock()
+		// Exhaustion is not an error: NOT_FOUND with no error text tells the
+		// host the snapshot is drained.
+		return statusNotFound
+	}
+	key := snapshot.keys[snapshot.next]
+	value := snapshot.values[snapshot.next]
+	snapshot.next++
+	cursors.Unlock()
+	// The caller owns these allocations and releases them with kvlite_free.
+	*outKey = C.CBytes(key)
+	*outKeyLength = C.size_t(len(key))
+	*outValue = C.CBytes(value)
+	*outValueLength = C.size_t(len(value))
+	return statusOK
+}
+
+//export kvlite_raw_scan_close
+func kvlite_raw_scan_close(cursor C.ulonglong, outError **C.char) C.int {
+	cursors.Lock()
+	snapshot := cursors.items[uint64(cursor)]
+	if snapshot != nil {
+		delete(cursors.items, uint64(cursor))
+	}
+	cursors.Unlock()
+	if snapshot == nil {
+		return statusFor(fmt.Errorf("%w: invalid scan cursor %d", kvlite.ErrInvalidArgument, uint64(cursor)), outError)
+	}
+	return statusOK
 }

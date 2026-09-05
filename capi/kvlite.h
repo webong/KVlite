@@ -66,6 +66,59 @@ int kvlite_delete(unsigned long long handle,
                   const void *key, size_t key_length,
                   char **out_error);
 
+/*
+ * Raw record-store operations. Unlike kvlite_put/get/delete, which work on
+ * logical keys with codec envelopes, the raw operations address the
+ * underlying engine's keyspace directly: no envelopes, no key mangling, and
+ * no TTL synthesis. They exist for trusted in-process bridges such as the
+ * runtime module driver loader, where the caller already speaks the engine
+ * keyspace (see TransportStore in the Go API).
+ *
+ * These are additive ABI v1 symbols: older v1 libraries may not export them.
+ * Hosts must resolve them optionally and report a clear incompatibility when
+ * they are absent instead of silently routing engine operations through the
+ * logical functions, which would corrupt the keyspace.
+ */
+int kvlite_raw_put(unsigned long long handle,
+                   const void *key, size_t key_length,
+                   const void *value, size_t value_length,
+                   char **out_error);
+
+/* Return an allocated engine payload. Release it with kvlite_free. */
+int kvlite_raw_get(unsigned long long handle,
+                   const void *key, size_t key_length,
+                   void **out_value, size_t *out_length,
+                   char **out_error);
+
+/* Delete an engine key. Deleting a missing key succeeds. */
+int kvlite_raw_delete(unsigned long long handle,
+                      const void *key, size_t key_length,
+                      char **out_error);
+
+/*
+ * Open a prefix scan over the engine keyspace. The snapshot is collected when
+ * the scan opens; later writes are not visible through an open cursor. The
+ * caller owns the cursor and must release it with kvlite_raw_scan_close.
+ * An empty prefix matches every key.
+ */
+int kvlite_raw_scan_open(unsigned long long handle,
+                         const void *prefix, size_t prefix_length,
+                         unsigned long long *out_cursor,
+                         char **out_error);
+
+/*
+ * Return the next allocated key/value pair in snapshot order. Release both
+ * with kvlite_free. Returns KVLITE_NOT_FOUND with no error text when the
+ * cursor is exhausted.
+ */
+int kvlite_raw_scan_next(unsigned long long cursor,
+                         void **out_key, size_t *out_key_length,
+                         void **out_value, size_t *out_value_length,
+                         char **out_error);
+
+/* Release a scan cursor. Closing an invalid cursor is an error. */
+int kvlite_raw_scan_close(unsigned long long cursor, char **out_error);
+
 /* Release memory returned through out_error or out_value. */
 void kvlite_free(void *pointer);
 

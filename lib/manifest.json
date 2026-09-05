@@ -5,6 +5,12 @@
   "moduleAbiVersion": 1,
   "moduleManifest": "kvlite-module.json",
   "moduleSearchPaths": ["KVLITE_MODULE_PATH", "KVLITE_HOME/modules", "KVLITE_HOME/drivers"],
+  "nativeModuleAbi": {
+    "header": "capi/kvlite_module.h",
+    "version": 1,
+    "initSymbol": "kvlite_module_init_v1",
+    "description": "Frozen in-process driver extension contract. A shared library exporting the init symbol registers driver operation tables over the engine keyspace; the host verifies its checksum before loading and never unloads it. Any language producing a C shared library can implement one; capi/testdata/nativememdb is the C reference."
+  },
   "driverBundles": [
     {
       "id": "rocksdb",

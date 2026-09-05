@@ -1,4 +1,4 @@
-.PHONY: test test-race test-rocksdb test-rocksdb-docker test-rocksdb-compat test-berkeleydb test-bindings-docker test-bindings-leveldb test-standalone-modules vet build-cli build-c-shared release release-cli release-c-shared release-berkeleydb release-http release-redis
+.PHONY: test test-race test-rocksdb test-rocksdb-docker test-rocksdb-compat test-berkeleydb test-bindings-docker test-bindings-leveldb test-standalone-modules test-bundle-runtime vet build-cli build-c-shared release release-cli release-c-shared release-berkeleydb release-http release-redis release-runtime
 
 RELEASE_VERSION ?= dev
 RELEASE_TARGET ?= $(shell go env GOHOSTOS)-$(shell go env GOHOSTARCH)
@@ -92,3 +92,16 @@ release-redis:
 # and CGO_ENABLED=1; run on a native runner, not in a restricted sandbox.
 test-standalone-modules:
 	bash ./scripts/test-standalone-modules.sh
+
+# Functional check for native runtime bundling using a synthetic C library:
+# proves non-system dependencies are copied, re-pointed, and executable from
+# the bundle on the current native target.
+test-bundle-runtime:
+	bash ./scripts/test-bundle-runtime.sh
+
+# Self-contained driver bundle with native runtime libraries and license
+# notices, e.g.:
+#   make release-runtime RELEASE_VERSION=v0.1.0 DRIVER=rocksdb \
+#     RELEASE_NOTICES="third-party/NOTICE-rocksdb third-party/NOTICE-snappy"
+release-runtime:
+	bash ./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --driver "$(DRIVER)" --bundle-runtime $(foreach notice,$(RELEASE_NOTICES),--notice-file "$(notice)")
