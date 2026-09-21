@@ -182,8 +182,10 @@ func BackendInfoFor(backend Backend) (BackendInfo, error) {
 
 // DefaultDriver returns the driver a bundled surface should use when its
 // caller did not name one. It preserves RocksDB as the compatibility default
-// when RocksDB is registered; otherwise it selects the only installed driver.
-// If more than one non-RocksDB driver is installed, it returns RocksDB so the
+// when RocksDB is registered; otherwise it selects the only installed
+// persistent driver. The built-in ephemeral memory driver never shadows a
+// real engine here: it is selected only when nothing else is installed. If
+// more than one persistent driver is installed, it returns RocksDB so the
 // caller receives the normal explicit-driver error instead of guessing.
 //
 // Open itself intentionally continues to request RocksDB by default. This
@@ -196,9 +198,18 @@ func DefaultDriver() DriverName {
 	if _, _, err := registeredDriverFor(DriverRocksDB); err == nil {
 		return DriverRocksDB
 	}
-	drivers := Drivers()
-	if len(drivers) == 1 {
-		return drivers[0].Driver
+	persistent := make([]DriverInfo, 0)
+	for _, info := range Drivers() {
+		if info.Driver == DriverMemory {
+			continue
+		}
+		persistent = append(persistent, info)
+	}
+	if len(persistent) == 1 {
+		return persistent[0].Driver
+	}
+	if len(persistent) == 0 {
+		return DriverMemory
 	}
 	return DriverRocksDB
 }
