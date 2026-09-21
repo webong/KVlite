@@ -324,7 +324,7 @@ if [[ "$bundle_runtime" == "1" ]]; then
       if [[ "$already_listed" == "0" ]]; then
         files+=("$bundled")
       fi
-    done < <(cd "$staging_dir/lib" && find . -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) | sed 's|^\./|lib/|' | sort)
+    done < <(cd "$staging_dir/lib" && find . \( -type f -o -type l \) \( -name '*.so*' -o -name '*.dylib' -o -name '*.dll' \) | sed 's|^\./|lib/|' | sort)
   fi
 fi
 

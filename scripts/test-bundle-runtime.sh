@@ -50,7 +50,9 @@ EOF
 cc -shared -fPIC -O2 -o "$work_root/libkvlite_test_dep.$suffix" "$work_root/dep.c" 2>/dev/null || \
   cc $shared_flag -fPIC -O2 -o "$work_root/libkvlite_test_dep.$suffix" "$work_root/dep.c" || \
   fail "could not build synthetic dependency"
-cc -O2 -o "$work_root/prog" "$work_root/main.c" -L"$work_root" -lkvlite_test_dep || fail "could not build synthetic binary"
+# Link with a real rpath, like release binaries carry for their native
+# dependencies: ldd must resolve the library for the bundler to find it.
+cc -O2 -o "$work_root/prog" "$work_root/main.c" -L"$work_root" -lkvlite_test_dep -Wl,-rpath,"$work_root" || fail "could not build synthetic binary"
 
 staging="$work_root/staging"
 mkdir -p "$staging/bin" "$staging/lib"
@@ -75,5 +77,17 @@ fi
 # Bundling twice must be a stable no-op, not a duplicate failure.
 bash "$repo_root/scripts/bundle-native-deps.sh" "$staging" "$target" >/dev/null || fail "re-bundling failed"
 [[ "$("$staging/bin/prog")" == "42" ]] || fail "re-bundled binary did not run"
+
+if [[ "$target" == linux-* ]]; then
+  # An unresolvable dependency must fail loudly with the library name,
+  # never silently produce an incomplete bundle.
+  cc -O2 -o "$work_root/prog-unresolved" "$work_root/main.c" -L"$work_root" -lkvlite_test_dep || fail "could not build unresolved binary"
+  bad_staging="$work_root/bad-staging"
+  mkdir -p "$bad_staging/bin"
+  cp "$work_root/prog-unresolved" "$bad_staging/bin/prog"
+  if bash "$repo_root/scripts/bundle-native-deps.sh" "$bad_staging" "$target" >/dev/null 2>&1; then
+    fail "unresolvable dependency was accepted"
+  fi
+fi
 
 printf 'bundle-runtime test: ok (synthetic dependency bundled and executable)\n' >&2

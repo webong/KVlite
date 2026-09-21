@@ -121,7 +121,16 @@ dependencies_for_darwin() {
 }
 
 dependencies_for_linux() {
-  ldd "$1" 2>/dev/null | awk '/=>/ { print $3 } /^[^ ]+\.so/ { print $1 }' | grep -v '^$' || true
+  # NB: ldd renders an unresolvable library as "libfoo.so => not found".
+  # The bare word "not" must never be treated as a path; unresolvable
+  # non-system libraries are rejected explicitly below instead. The second
+  # rule only fires on lines without "=>" (linux-vdso and the loader
+  # itself), so resolved names are never emitted twice, bare.
+  ldd "$1" 2>/dev/null | awk '/=>/ { if ($3 != "" && $3 != "not") print $3; next } /^[^ ]+\.so/ { print $1 }' | grep -v '^$' || true
+}
+
+unresolved_for_linux() {
+  ldd "$1" 2>/dev/null | awk '/=> not found/ { print $1 }' || true
 }
 
 dependencies_for_windows() {
@@ -169,6 +178,20 @@ install_bundled_library() {
   cp "$source" "$destination"
   chmod 755 "$destination"
   printf 'bundle-native-deps: bundled %s\n' "$source" >&2
+  post_copy_fixup "$destination"
+}
+
+# On Linux a library's SONAME can differ from its filename while DT_NEEDED
+# records the SONAME (libfoo.so.2 requested, libfoo.so.2.1.0 on disk). Link
+# the SONAME beside the copy so the bundle resolves exactly like the system.
+post_copy_fixup() {
+  [[ "$os" == "linux" ]] || return 0
+  local soname
+  soname="$(patchelf --print-soname "$1" 2>/dev/null || true)"
+  if [[ -n "$soname" && "$soname" != "$(basename "$1")" ]]; then
+    ln -sf "$(basename "$1")" "$(dirname "$1")/$soname"
+    printf 'bundle-native-deps: linked SONAME %s\n' "$soname" >&2
+  fi
 }
 
 # Non-system dependencies land beside the binaries that load them: lib/ on
@@ -199,6 +222,15 @@ is_system_dependency() {
 for _ in $(seq 1 10); do
   added=0
   for binary in "${staged_binaries[@]}"; do
+    if [[ "$os" == "linux" ]]; then
+      # A missing dependency would otherwise bundle silently incomplete:
+      # fail here with the library name and the remedy.
+      while IFS= read -r missing; do
+        [[ -n "$missing" ]] || continue
+        is_system_dependency "$missing" && continue
+        fail "dependency $missing of $binary is not resolvable (ldd reports 'not found'); link with an rpath or set LD_LIBRARY_PATH so it resolves"
+      done < <(unresolved_for_linux "$binary")
+    fi
     deps="$(list_dependencies "$binary")"
     while IFS= read -r dep; do
       [[ -n "$dep" ]] || continue
