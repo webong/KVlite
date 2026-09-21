@@ -126,11 +126,16 @@ dependencies_for_linux() {
   # non-system libraries are rejected explicitly below instead. The second
   # rule only fires on lines without "=>" (linux-vdso and the loader
   # itself), so resolved names are never emitted twice, bare.
-  ldd "$1" 2>/dev/null | awk '/=>/ { if ($3 != "" && $3 != "not") print $3; next } /^[^ ]+\.so/ { print $1 }' | grep -v '^$' || true
+  #
+  # KVLITE_BUNDLE_LIB_PATH is honored through LD_LIBRARY_PATH so link-time
+  # directories resolve exactly like the build saw them.
+  LD_LIBRARY_PATH="${KVLITE_BUNDLE_LIB_PATH:-}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    ldd "$1" 2>/dev/null | awk '/=>/ { if ($3 != "" && $3 != "not") print $3; next } /^[^ ]+\.so/ { print $1 }' | grep -v '^$' || true
 }
 
 unresolved_for_linux() {
-  ldd "$1" 2>/dev/null | awk '/=> not found/ { print $1 }' || true
+  LD_LIBRARY_PATH="${KVLITE_BUNDLE_LIB_PATH:-}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    ldd "$1" 2>/dev/null | awk '/=> not found/ { print $1 }' || true
 }
 
 dependencies_for_windows() {
@@ -141,19 +146,26 @@ dependencies_for_windows() {
   fi
 }
 
-# Resolve a bare DLL name to a file: alongside the binary first, then PATH.
-resolve_windows_dll() {
+# Resolve a bare library name (no directory part, as recorded by linkers
+# that use -install_name filenames or -l names) to a file: beside the
+# binary first, then KVLITE_BUNDLE_LIB_PATH, a path-list of link-time
+# library directories the caller provides (for example the RocksDB prefix
+# lib). Callers must set it whenever dependencies are not absolute.
+resolve_bare_dependency() {
   local name="$1"
   local beside="$2"
   if [[ -f "$beside/$name" ]]; then
     printf '%s/%s\n' "$beside" "$name"
     return 0
   fi
+  local search="${KVLITE_BUNDLE_LIB_PATH:-}"
+  local separator=":"
+  [[ "$os" == "windows" ]] && separator=";"
   local dir
   local saved_ifs="$IFS"
-  IFS=';'
-  for dir in $PATH; do
-    if [[ -f "$dir/$name" ]]; then
+  IFS="$separator"
+  for dir in $search; do
+    if [[ -n "$dir" && -f "$dir/$name" ]]; then
       printf '%s/%s\n' "$dir" "$name"
       IFS="$saved_ifs"
       return 0
@@ -175,7 +187,10 @@ install_bundled_library() {
     [[ "$have" == "$want" ]] || fail "conflicting runtime library $base from $source"
     return 0
   fi
-  cp "$source" "$destination"
+  # Dereference: a resolved dependency is often itself a version symlink
+  # (librocksdb.10.8.dylib -> librocksdb.10.8.3.dylib). The bundle needs the
+  # real bytes under the requested name, not a link dangling out of the tree.
+  cp -L "$source" "$destination"
   chmod 755 "$destination"
   printf 'bundle-native-deps: bundled %s\n' "$source" >&2
   post_copy_fixup "$destination"
@@ -224,11 +239,13 @@ for _ in $(seq 1 10); do
   for binary in "${staged_binaries[@]}"; do
     if [[ "$os" == "linux" ]]; then
       # A missing dependency would otherwise bundle silently incomplete:
-      # fail here with the library name and the remedy.
+      # fail here with the library name and the remedy. (Entries resolvable
+      # through KVLITE_BUNDLE_LIB_PATH never reach this list: ldd resolves
+      # them first, honoring the same variable.)
       while IFS= read -r missing; do
         [[ -n "$missing" ]] || continue
         is_system_dependency "$missing" && continue
-        fail "dependency $missing of $binary is not resolvable (ldd reports 'not found'); link with an rpath or set LD_LIBRARY_PATH so it resolves"
+        fail "dependency $missing of $binary is not resolvable (ldd reports 'not found'); link with an rpath, set LD_LIBRARY_PATH so it resolves, or point KVLITE_BUNDLE_LIB_PATH at its directory"
       done < <(unresolved_for_linux "$binary")
     fi
     deps="$(list_dependencies "$binary")"
@@ -237,16 +254,25 @@ for _ in $(seq 1 10); do
       case "$dep" in
         @loader_path*|@rpath*) continue ;;
       esac
-      # Windows reports bare DLL names; resolve them beside the binary,
-      # then through PATH.
-      if [[ "$os" == "windows" ]]; then
-        case "$dep" in
-          *[/\\]*) ;;
-          *)
-            resolved="$(resolve_windows_dll "$dep" "$(dirname "$binary")")" || fail "dependency $dep of $binary was not found beside it or on PATH"
-            dep="$resolved"
-            ;;
-        esac
+      # Windows reports bare DLL names; other linkers may record bare
+      # filenames too (RocksDB uses its -install_name basename). Resolve
+      # beside the binary, through KVLITE_BUNDLE_LIB_PATH, and on Windows
+      # through PATH as a last resort.
+      if [[ "$dep" != *[/\\]* ]]; then
+        resolved="$(resolve_bare_dependency "$dep" "$(dirname "$binary")")"
+        if [[ -z "$resolved" && "$os" == "windows" ]]; then
+          saved_path_ifs="$IFS"
+          IFS=';'
+          for path_dir in $PATH; do
+            if [[ -f "$path_dir/$dep" ]]; then
+              resolved="$path_dir/$dep"
+              break
+            fi
+          done
+          IFS="$saved_path_ifs"
+        fi
+        [[ -n "${resolved:-}" ]] || fail "dependency $dep of $binary was not found beside it, on KVLITE_BUNDLE_LIB_PATH, or on PATH"
+        dep="$resolved"
       fi
       is_system_dependency "$dep" && continue
       [[ -f "$dep" ]] || fail "dependency $dep of $binary is not a file on disk"

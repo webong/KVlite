@@ -147,6 +147,9 @@ jobs:
           fi
           export CGO_CFLAGS="-I${KVLITE_ROCKSDB_PREFIX}/include"
           export CGO_LDFLAGS="-L${KVLITE_ROCKSDB_PREFIX}/lib"
+          # Bare dependency names (RocksDB records its install-name basename,
+          # not a path) resolve through this link-time library directory.
+          export KVLITE_BUNDLE_LIB_PATH="${KVLITE_ROCKSDB_PREFIX}/lib"
           if [[ "${RUNNER_OS}" == 'macOS' ]]; then
             # Mirror the library search paths of the build step above:
             # compression libraries live under the Homebrew prefix, and the

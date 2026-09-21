@@ -78,6 +78,30 @@ fi
 bash "$repo_root/scripts/bundle-native-deps.sh" "$staging" "$target" >/dev/null || fail "re-bundling failed"
 [[ "$("$staging/bin/prog")" == "42" ]] || fail "re-bundled binary did not run"
 
+# Bare dependency names (no directory part, as recorded for install-name
+# basenames such as RocksDB's) must resolve through KVLITE_BUNDLE_LIB_PATH.
+# The binary deliberately carries no rpath so only the variable saves it.
+mkdir -p "$work_root/deplibs"
+cp "$work_root/dep.c" "$work_root/bare.c"
+if [[ "$target" == darwin-* ]]; then
+  cc -dynamiclib -fPIC -O2 -o "$work_root/deplibs/libbaredep.dylib" "$work_root/bare.c" || fail "could not build bare dependency"
+  install_name_tool -id "libbaredep.dylib" "$work_root/deplibs/libbaredep.dylib" || fail "could not set bare install name"
+else
+  cc -shared -fPIC -O2 -o "$work_root/deplibs/libbaredep.so" "$work_root/bare.c" || fail "could not build bare dependency"
+fi
+cc -O2 -o "$work_root/prog2" "$work_root/main.c" -L"$work_root/deplibs" -lbaredep || fail "could not build bare-linked binary"
+bare_staging="$work_root/bare-staging"
+mkdir -p "$bare_staging/bin"
+cp "$work_root/prog2" "$bare_staging/bin/prog2"
+KVLITE_BUNDLE_LIB_PATH="$work_root/deplibs" \
+  bash "$repo_root/scripts/bundle-native-deps.sh" "$bare_staging" "$target" >/dev/null || fail "bare-name bundling failed"
+case "$target" in
+  darwin-*) bundled_bare="$bare_staging/lib/libbaredep.dylib" ;;
+  *) bundled_bare="$bare_staging/lib/libbaredep.so" ;;
+esac
+[[ -f "$bundled_bare" ]] || fail "bare dependency was not copied into lib/"
+[[ "$("$bare_staging/bin/prog2")" == "42" ]] || fail "bare-bundled binary did not run"
+
 if [[ "$target" == linux-* ]]; then
   # An unresolvable dependency must fail loudly with the library name,
   # never silently produce an incomplete bundle.
