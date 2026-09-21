@@ -138,6 +138,23 @@ jobs:
           export KVLITE_HOME="$PWD/dist/$version/${{ matrix.target }}"
           ./dist/"$version"/"${{ matrix.target }}"/drivers/rocksdb/bin/kvlite module verify rocksdb
 
+      - name: Standalone extension integration (RocksDB)
+        shell: bash
+        run: |
+          export CGO_CFLAGS="-I${KVLITE_ROCKSDB_PREFIX}/include"
+          export CGO_LDFLAGS="-L${KVLITE_ROCKSDB_PREFIX}/lib"
+          if [[ "${RUNNER_OS}" == 'macOS' ]]; then
+            homebrew_prefix="$(brew --prefix)"
+            export CGO_CFLAGS="${CGO_CFLAGS} -I${homebrew_prefix}/include"
+            export CGO_LDFLAGS="${CGO_LDFLAGS} -L${homebrew_prefix}/lib"
+            export DYLD_LIBRARY_PATH="${KVLITE_ROCKSDB_PREFIX}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+          else
+            export LD_LIBRARY_PATH="${KVLITE_ROCKSDB_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          fi
+          KVLITE_STANDALONE_DRIVER=rocksdb \
+          KVLITE_STANDALONE_TEST_VERSION=standalone-test-rocksdb \
+            make test-standalone-modules
+
       - name: Pack and publish release tarballs
         shell: bash
         run: |

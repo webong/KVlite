@@ -85,11 +85,13 @@ release-http:
 release-redis:
 	bash ./scripts/build-release.sh --version "$(RELEASE_VERSION)" --target "$(RELEASE_TARGET)" --extension redis
 
-# Native LevelDB integration check for standalone extension bundles: builds a
-# LevelDB driver bundle plus both protocol executables, assembles them under a
+# Standalone extension integration check (default driver: LevelDB): builds a
+# driver bundle plus both protocol executables, assembles them under a
 # temporary KVLITE_HOME, and proves discovery, verification, sole-owner HTTP
-# and Redis operation, and the missing-driver error. Needs loopback networking
-# and CGO_ENABLED=1; run on a native runner, not in a restricted sandbox.
+# and Redis operation, shared-owner operation, and the missing-driver error.
+# KVLITE_STANDALONE_DRIVER=rocksdb runs the identical flow against RocksDB
+# (needs its native toolchain). Needs loopback networking and CGO_ENABLED=1;
+# run on a native runner, not in a restricted sandbox.
 test-standalone-modules:
 	bash ./scripts/test-standalone-modules.sh
 
