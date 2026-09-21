@@ -26,8 +26,14 @@ rocksdb_source="$1"
 output_dir="$2"
 
 [[ -d "$rocksdb_source" ]] || fail "RocksDB source directory does not exist: $rocksdb_source"
-license="$rocksdb_source/LICENSE"
-[[ -f "$license" ]] || fail "RocksDB LICENSE not found at $license; refusing to assemble notices"
+license=""
+for candidate in LICENSE LICENSE.Apache LICENSE.txt COPYING COPYING.txt LICENSE.md; do
+  if [[ -f "$rocksdb_source/$candidate" ]]; then
+    license="$rocksdb_source/$candidate"
+    break
+  fi
+done
+[[ -n "$license" ]] || fail "no license text (LICENSE, LICENSE.Apache, COPYING, ...) in $rocksdb_source; refusing to assemble notices (contents: $(ls "$rocksdb_source" | tr '\n' ' '))"
 mkdir -p "$output_dir"
 cp "$license" "$output_dir/NOTICE-rocksdb"
 

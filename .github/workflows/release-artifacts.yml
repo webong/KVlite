@@ -65,6 +65,12 @@ jobs:
             homebrew_prefix="$(brew --prefix)"
             export CPPFLAGS="-I${homebrew_prefix}/include"
             export LDFLAGS="-L${homebrew_prefix}/lib"
+            # RocksDB's feature probes compile with CFLAGS/CXXFLAGS only;
+            # CPPFLAGS alone leaves compression headers invisible and the
+            # build silently drops them (surfacing much later as
+            # "Compression type ... is not linked with the binary").
+            export CFLAGS="-I${homebrew_prefix}/include"
+            export CXXFLAGS="-I${homebrew_prefix}/include"
           fi
 
           if command -v nproc >/dev/null 2>&1; then
@@ -80,6 +86,16 @@ jobs:
           mkdir -p "${rocksdb_prefix}/include" "${rocksdb_prefix}/lib"
           cp -R "${rocksdb_source}/include/rocksdb" "${rocksdb_prefix}/include/"
           cp "${rocksdb_source}"/librocksdb.* "${rocksdb_prefix}/lib/"
+          # KVLite's default profile compresses with LZ4: fail the build
+          # here if the feature probe missed it instead of failing tests
+          # ten minutes later.
+          if [[ "${RUNNER_OS}" == 'macOS' ]]; then
+            otool -L "${rocksdb_prefix}"/lib/librocksdb.*.dylib | grep -qi lz4 \
+              || { echo 'RocksDB was built without LZ4 support' >&2; exit 1; }
+          else
+            ldd "${rocksdb_prefix}"/lib/librocksdb.so* | grep -qi lz4 \
+              || { echo 'RocksDB was built without LZ4 support' >&2; exit 1; }
+          fi
           echo "KVLITE_ROCKSDB_PREFIX=${rocksdb_prefix}" >> "${GITHUB_ENV}"
 
       - name: Build native artifacts
