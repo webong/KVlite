@@ -147,6 +147,15 @@ jobs:
           fi
           export CGO_CFLAGS="-I${KVLITE_ROCKSDB_PREFIX}/include"
           export CGO_LDFLAGS="-L${KVLITE_ROCKSDB_PREFIX}/lib"
+          if [[ "${RUNNER_OS}" == 'macOS' ]]; then
+            # Mirror the library search paths of the build step above:
+            # compression libraries live under the Homebrew prefix, and the
+            # link needs them even though their headers were only needed to
+            # compile.
+            homebrew_prefix="$(brew --prefix)"
+            export CGO_CFLAGS="${CGO_CFLAGS} -I${homebrew_prefix}/include"
+            export CGO_LDFLAGS="${CGO_LDFLAGS} -L${homebrew_prefix}/lib"
+          fi
           bash ./scripts/build-release.sh --version "$version" --target "${{ matrix.target }}" \
             --driver rocksdb --bundle-runtime "${notice_args[@]}"
           # The runtime bundle supersedes the plain RocksDB bundle above: same
