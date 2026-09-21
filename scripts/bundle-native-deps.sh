@@ -248,19 +248,26 @@ for _ in $(seq 1 10); do
         fail "dependency $missing of $binary is not resolvable (ldd reports 'not found'); link with an rpath, set LD_LIBRARY_PATH so it resolves, or point KVLITE_BUNDLE_LIB_PATH at its directory"
       done < <(unresolved_for_linux "$binary")
     fi
-    deps="$(list_dependencies "$binary")"
+    deps="$(list_dependencies "$binary")" || deps=""
     while IFS= read -r dep; do
       [[ -n "$dep" ]] || continue
       case "$dep" in
         @loader_path*|@rpath*) continue ;;
       esac
-      # Windows reports bare DLL names; other linkers may record bare
-      # filenames too (RocksDB uses its -install_name basename). Resolve
-      # beside the binary, through KVLITE_BUNDLE_LIB_PATH, and on Windows
-      # through PATH as a last resort.
+      # System entries first: virtual mappings like linux-vdso have bare
+      # names too, and must never reach the resolver below. (A bare name
+      # that fails resolution must fail LOUDLY on the assignment itself:
+      # an unguarded failed substitution aborts silently under set -e.)
+      is_system_dependency "$dep" && continue
+      # Remaining bare names (no directory part) arrive from linkers that
+      # record filenames: Windows DLL names, or install-name basenames such
+      # as RocksDB's librocksdb.10.8.dylib. Resolve beside the binary,
+      # through KVLITE_BUNDLE_LIB_PATH, and on Windows through PATH as a
+      # last resort.
       if [[ "$dep" != *[/\\]* ]]; then
-        resolved="$(resolve_bare_dependency "$dep" "$(dirname "$binary")")"
-        if [[ -z "$resolved" && "$os" == "windows" ]]; then
+        if resolved="$(resolve_bare_dependency "$dep" "$(dirname "$binary")")"; then
+          dep="$resolved"
+        elif [[ "$os" == "windows" ]]; then
           saved_path_ifs="$IFS"
           IFS=';'
           for path_dir in $PATH; do
@@ -270,11 +277,12 @@ for _ in $(seq 1 10); do
             fi
           done
           IFS="$saved_path_ifs"
+          [[ -n "$resolved" ]] || fail "dependency $dep of $binary was not found beside it, on KVLITE_BUNDLE_LIB_PATH, or on PATH"
+          dep="$resolved"
+        else
+          fail "dependency $dep of $binary was not found beside it or on KVLITE_BUNDLE_LIB_PATH"
         fi
-        [[ -n "${resolved:-}" ]] || fail "dependency $dep of $binary was not found beside it, on KVLITE_BUNDLE_LIB_PATH, or on PATH"
-        dep="$resolved"
       fi
-      is_system_dependency "$dep" && continue
       [[ -f "$dep" ]] || fail "dependency $dep of $binary is not a file on disk"
       before="$(ls "$bundle_destination_dir" | wc -l)"
       install_bundled_library "$dep"
