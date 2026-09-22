@@ -30,3 +30,18 @@ Depends: kvlite-leveldb | kvlite-rocksdb, ${shlibs:Depends}, ${misc:Depends}
 Description: KVLite standalone Redis-compatible protocol module
  The kvlite-redis executable module: a direct owner or an attached process
  over an HTTP owner. Needs one installed kvlite driver package.
+
+# Uncomment for distros whose RocksDB development packages you have pinned;
+# set the dependency to your release's library name, e.g.
+#   apt-cache search '^librocksdb'
+# on Debian/Ubuntu. The bundle links the system engine dynamically and
+# verifies it at install time; prefer a --bundle-runtime build wherever the
+# system library cannot be pinned (see packaging/README.md).
+#
+# Package: kvlite-rocksdb
+# Architecture: any
+# Depends: librocksdbX, ${shlibs:Depends}, ${misc:Depends}
+# Description: KVLite RocksDB storage driver (system engine)
+#  The RocksDB driver bundle for KVLite, composed with the distro engine:
+#  no engine code ships in this package. Any installed kvlite host drives
+#  it (install.sh --no-cli-link keeps bin/kvlite single-owned).

@@ -17,6 +17,10 @@
 #   --link-cli DRIVER   Driver bundle whose CLI becomes bin/kvlite
 #                       (default: leveldb when installed, else the only
 #                       installed driver; required when several are present)
+#   --no-cli-link       Do not link bin/kvlite at all. For complement driver
+#                       packages: any installed kvlite CLI already drives
+#                       every installed driver bundle, so only one package
+#                       needs to own the link.
 #   --skip-verify       Skip the post-install module verification
 #   --help              Show this help
 #
@@ -58,6 +62,7 @@ from=""
 target=""
 components=()
 link_cli=""
+no_cli_link=0
 verify=1
 
 while (($# > 0)); do
@@ -96,6 +101,10 @@ while (($# > 0)); do
       (($# >= 2)) || fail "--link-cli requires a value"
       link_cli="$2"
       shift 2
+      ;;
+    --no-cli-link)
+      no_cli_link=1
+      shift 1
       ;;
     --skip-verify)
       verify=0
@@ -201,7 +210,9 @@ fi
 # One CLI owns bin/kvlite; every other binary links under its own name.
 mkdir -p "$dest_prefix/bin"
 link_target_driver="$link_cli"
-if [[ -z "$link_target_driver" ]] && ((${#installed_drivers[@]} > 0)); then
+if [[ "$no_cli_link" == "1" ]]; then
+  link_target_driver=""
+elif [[ -z "$link_target_driver" ]] && ((${#installed_drivers[@]} > 0)); then
   for driver in "${installed_drivers[@]}"; do
     if [[ "$driver" == "leveldb" ]]; then
       link_target_driver="leveldb"

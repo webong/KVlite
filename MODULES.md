@@ -251,4 +251,7 @@ example `kvlite_module_init_v1`), not Go runtime plugins.
 distribution. It does not change licensing for any other KVLite module and is
 absent from standard release bundles. The application owner must explicitly
 provide a Berkeley DB distribution under terms it is entitled to use; otherwise
-the driver reports `ErrBerkeleyDBNotBuilt`.
+the driver reports `ErrBerkeleyDBNotBuilt`. An adapter-only shim bundle (built
+with the explicit `--allow-berkeleydb` gate against the owner's library) is
+publishable precisely because it contains no Oracle code — but Oracle's
+library itself is never redistributed by this project.

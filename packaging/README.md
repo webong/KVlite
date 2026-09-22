@@ -97,6 +97,39 @@ root is usable as a single search path (see `MODULES.md`).
   separately, in which case the last package installed must verify the
   assembled tree.
 
+## Bring your own engine (composability)
+
+KVLite ships shims, not engines — except where the engine is pure Go and
+there is nothing else to ship. Each driver says exactly what it needs:
+
+| Driver | Engine lives in | User installs |
+| --- | --- | --- |
+| `memory` | core itself | nothing |
+| `leveldb` | the bundle (pure Go) | nothing, ever |
+| `rocksdb` | system **or** bundle, your choice | distro `rocksdb` **or** a `--bundle-runtime` package |
+| `berkeleydb` | system only, always | a Berkeley DB you are entitled to use |
+
+- **LevelDB is not composable and never will be**: engine and shim are the
+  same compiled Go. There is no standalone LevelDB to bind.
+- **RocksDB composes through dynamic linking.** A non-bundled build links
+  `librocksdb.so` normally, and whatever provides a compatible library at
+  runtime works. Compatibility is the shared-library SONAME major:
+  KVLite supports `librocksdb.so.10` (`v10.8.3`–`v10.10.1` tested); the
+  linker itself refuses anything else. A Debian package therefore depends
+  on the distro RocksDB (e.g. `Depends: librocksdbX`), a Homebrew formula
+  on `depends_on "rocksdb"`, and only LZ4 support is actually required at
+  runtime. Prefer the `--bundle-runtime` package wherever the system
+  library cannot be pinned.
+- **Berkeley DB composes through its stable C API.** The adapter checks the
+  API surface at compile time (`DB_VERSION_MAJOR`, Btree flags), not one
+  exact release, and bundles no Oracle code — so an adapter-only shim
+  bundle is publishable with the explicit license gate, while Oracle's
+  library itself is never redistributed by this project. Mainstream
+  managers barely carry modern Berkeley DB (Debian has only the ancient
+  db5.3; Homebrew's is AGPL-gated), so in practice the owner builds or
+  installs Oracle Berkeley DB 18.x themselves and points `BERKELEYDB_CFLAGS`
+  / `BERKELEYDB_LDFLAGS` at it. See `extensions/berkeleydb/README.md`.
+
 ## Windows (zips, like SQLite)
 
 Windows gets no shell installer and no system package from this project —

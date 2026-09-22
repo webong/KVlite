@@ -23,9 +23,9 @@ class Kvlite < Formula
     system "make", "release-http", "RELEASE_VERSION=#{version}"
     system "make", "release-redis", "RELEASE_VERSION=#{version}"
     system "bash", "scripts/install.sh",
-           "--prefix=#{prefix}",
-           "--version=#{version}",
-           "--link-cli=leveldb"
+           "--prefix", "#{prefix}",
+           "--version", "#{version}",
+           "--link-cli", "leveldb"
   end
 
   def caveats
