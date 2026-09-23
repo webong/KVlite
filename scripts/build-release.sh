@@ -17,7 +17,9 @@ Build KVLite artifacts for the current native platform.
 Options:
   --version VERSION       Release version used in dist/VERSION (default: dev)
   --target OS-ARCH        Native target, such as darwin-arm64 (default: host)
-  --driver NAME           Driver bundle: rocksdb, leveldb, or berkeleydb (default: rocksdb)
+  --driver NAME           Driver bundle: rocksdb, leveldb, berkeleydb, or
+                          "none" for a driverless host CLI (core plus the
+                          ephemeral memory engine only; default: rocksdb)
   --extension NAME        Protocol module bundle: http or redis (mutually exclusive with --driver)
   --allow-berkeleydb      Enable Berkeley DB release bundle build. This requires an explicit
                           license-reviewed decision from the bundle owner.
@@ -142,10 +144,12 @@ case "$driver" in
   rocksdb)
     build_tags="rocksdb,kvlite_rocksdb"
     native_driver=1
+    is_host_bundle=0
     ;;
   leveldb)
     build_tags="kvlite_leveldb"
     native_driver=0
+    is_host_bundle=0
     ;;
   berkeleydb)
     if [[ "$allow_berkeleydb" != "1" ]]; then
@@ -153,15 +157,28 @@ case "$driver" in
     fi
     build_tags="berkeleydb,kvlite_berkeleydb"
     native_driver=1
+    is_host_bundle=0
     ;;
-  *) fail "unsupported driver: $driver (expected rocksdb, leveldb, or berkeleydb)" ;;
+  none)
+    # Driverless host: no persistent engine is linked or bundled. The CLI
+    # serves memory, discovers installed drivers, and launches verified
+    # protocol executables. This is the pluggable-first base artifact.
+    # --linked-extensions still applies as a dev convenience (linked
+    # protocols, still no drivers).
+    build_tags="kvlite_no_linked_extensions"
+    native_driver=0
+    is_host_bundle=1
+    ;;
+  *) fail "unsupported driver: $driver (expected rocksdb, leveldb, berkeleydb, or none)" ;;
 esac
 
 # Release driver CLIs are extension-free hosts: they launch verified standalone
 # protocol executables instead of linking HTTP/Redis. Pass --linked-extensions
 # only for an explicit development/convenience profile.
-if [[ "$linked_extensions" == "0" ]]; then
+if [[ "$linked_extensions" == "0" && "$is_host_bundle" == "0" ]]; then
   build_tags="$build_tags,kvlite_no_linked_extensions"
+elif [[ "$linked_extensions" == "1" && "$is_host_bundle" == "1" ]]; then
+  build_tags=""
 fi
 
 case "$target" in
@@ -190,16 +207,28 @@ if [[ "$is_extension_bundle" == "1" ]]; then
   done
   components=("${normalized[@]}")
 else
-  if ((${#components[@]} == 0)); then
-    components=(cli c-shared)
-  fi
+  if [[ "$is_host_bundle" == "1" ]]; then
+    if ((${#components[@]} == 0)); then
+      components=(cli)
+    fi
+    for component in "${components[@]}"; do
+      case "$component" in
+        cli) ;;
+        *) fail "unsupported component for a host bundle: $component (a host has no engine for a C library)" ;;
+      esac
+    done
+  else
+    if ((${#components[@]} == 0)); then
+      components=(cli c-shared)
+    fi
 
-  for component in "${components[@]}"; do
-    case "$component" in
-      cli|c-shared) ;;
-      *) fail "unsupported component: $component" ;;
-    esac
-  done
+    for component in "${components[@]}"; do
+      case "$component" in
+        cli|c-shared) ;;
+        *) fail "unsupported component: $component" ;;
+      esac
+    done
+  fi
 fi
 
 needs_cgo="$native_driver"
@@ -242,6 +271,8 @@ if [[ "$is_extension_bundle" == "1" ]]; then
     *) extension_executable="kvlite-$extension" ;;
   esac
   artifact_dir="$repo_root/dist/$version/$target/modules/$extension"
+elif [[ "$is_host_bundle" == "1" ]]; then
+  artifact_dir="$repo_root/dist/$version/$target/host"
 else
   artifact_dir="$repo_root/dist/$version/$target/drivers/$driver"
 fi
@@ -254,7 +285,7 @@ trap cleanup EXIT
 
 cd "$repo_root"
 mkdir -p "$staging_dir/bin"
-if [[ "$is_extension_bundle" == "0" ]]; then
+if [[ "$is_extension_bundle" == "0" && "$is_host_bundle" == "0" ]]; then
   mkdir -p "$staging_dir/lib" "$staging_dir/include"
 fi
 files=()
@@ -427,15 +458,17 @@ write_extension_manifest() {
   } > "$staging_dir/kvlite-module.json"
 }
 
-write_module_manifest
-(
-  cd "$staging_dir"
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum kvlite-module.json
-  else
-    shasum -a 256 kvlite-module.json
-  fi
-) >> "$staging_dir/SHA256SUMS"
+if [[ "$is_host_bundle" == "0" ]]; then
+  write_module_manifest
+  (
+    cd "$staging_dir"
+    if command -v sha256sum >/dev/null 2>&1; then
+      sha256sum kvlite-module.json
+    else
+      shasum -a 256 kvlite-module.json
+    fi
+  ) >> "$staging_dir/SHA256SUMS"
+fi
 
 # Only replace a version/target directory after every requested artifact was
 # built and checksummed. This keeps failed native builds out of dist/.
@@ -446,6 +479,8 @@ mv "$staging_dir" "$artifact_dir"
 
 if [[ "$is_extension_bundle" == "1" ]]; then
   printf 'Built KVLite %s extension module %s for %s in %s\n' "$version" "$extension" "$target" "$artifact_dir"
+elif [[ "$is_host_bundle" == "1" ]]; then
+  printf 'Built KVLite %s driverless host CLI for %s in %s\n' "$version" "$target" "$artifact_dir"
 else
   if [[ "$linked_extensions" == "0" ]]; then
     printf 'Built KVLite %s driver module %s for %s in %s (CLI without linked extensions)\n' "$version" "$driver" "$target" "$artifact_dir"

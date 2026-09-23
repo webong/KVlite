@@ -30,6 +30,9 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "kvlite-http: --path is required")
 		return 2
 	}
+	if *driver == string(kvlite.DriverMemory) {
+		fmt.Fprintln(os.Stderr, "kvlite-http: serving an ephemeral in-memory database; everything will be lost on exit")
+	}
 
 	dbOptions := make([]kvlite.Option, 0)
 	if *driver != "" {

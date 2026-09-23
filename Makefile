@@ -115,12 +115,14 @@ release-runtime:
 INSTALL_PREFIX ?= /usr/local
 INSTALL_VERSION ?= $(RELEASE_VERSION)
 INSTALL_TARGET ?= $(RELEASE_TARGET)
-INSTALL_LINK_CLI ?= leveldb
+# Driver bundle whose CLI becomes bin/kvlite when no host is installed.
+# Empty means: host owns the link, else the only installed driver, else fail.
+INSTALL_LINK_CLI ?=
 install:
 	bash ./scripts/install.sh --prefix "$(INSTALL_PREFIX)" \
 	  $(if $(INSTALL_DESTDIR),--destdir "$(INSTALL_DESTDIR)") \
 	  --version "$(INSTALL_VERSION)" --target "$(INSTALL_TARGET)" \
-	  --link-cli "$(INSTALL_LINK_CLI)"
+	  $(if $(INSTALL_LINK_CLI),--link-cli "$(INSTALL_LINK_CLI)")
 
 # Pack per-target release tarballs plus checksums for GitHub release assets
 # and the online installer, e.g.:

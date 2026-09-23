@@ -18,6 +18,7 @@ class KvliteRocksdb < Formula
   version "0.1.0"
 
   depends_on "go" => :build
+  depends_on "kvlite"
   depends_on "rocksdb"
   depends_on "lz4"
   depends_on "snappy"
@@ -50,8 +51,10 @@ class KvliteRocksdb < Formula
   end
 
   test do
-    # The host CLI comes from the kvlite formula; here we only prove the
-    # bundle tree is present and well-formed.
-    assert_predicate opt_lib/"kvlite/drivers/rocksdb/kvlite-module.json", :exist?
+    ENV["KVLITE_SYSTEM_MODULE_PATH"] = "#{opt_lib}/kvlite"
+    ENV["KVLITE_MODULE_PATH"] = ""
+    ENV["KVLITE_HOME"] = ""
+    host = Formula["kvlite"].opt_bin/"kvlite"
+    system host.to_s, "module", "verify", "rocksdb"
   end
 end

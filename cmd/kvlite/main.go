@@ -177,6 +177,9 @@ func run(args []string) int {
 	if *driver == "" {
 		*driver = string(kvlite.DefaultDriver())
 	}
+	if *driver == string(kvlite.DriverMemory) {
+		fmt.Fprintln(os.Stderr, "kvlite: serving an ephemeral in-memory database; everything will be lost on exit (choose --driver for persistence)")
+	}
 
 	db, err := kvlite.Open(*path, kvlite.WithDriver(*driver))
 	if err != nil {
@@ -299,6 +302,9 @@ func runServeStandaloneBoth(path, driver, listen, token string, maxRequestBytes 
 	if strings.TrimSpace(path) == "" {
 		fmt.Fprintln(os.Stderr, "kvlite: --path is required")
 		return 2
+	}
+	if driver == string(kvlite.DriverMemory) {
+		fmt.Fprintln(os.Stderr, "kvlite: serving an ephemeral in-memory database; everything will be lost on exit (choose --driver for persistence)")
 	}
 	if err := requireExplicitServePort(listen, "--listen"); err != nil {
 		return 2

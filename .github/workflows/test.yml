@@ -43,5 +43,8 @@ jobs:
       - name: Standalone extension integration (LevelDB)
         run: make test-standalone-modules
 
+      - name: Online installer end-to-end
+        run: make test-install-online
+
       - name: Runtime bundling check
         run: make test-bundle-runtime

@@ -7,29 +7,38 @@ Standards-Version: 4.6.2
 Homepage: https://github.com/webong/KVlite
 Rules-Requires-Root: no
 
-Package: kvlite-leveldb
+Package: kvlite
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: KVLite engine-neutral key-value store (LevelDB driver)
- KVLite core with the pure-Go LevelDB storage driver, installed as a
- versioned, checksummed module catalog plus an extension-free host CLI.
+Description: KVLite pluggable key-value host CLI (no default engine)
+ The driverless host: core plus the ephemeral memory engine, discovering
+ every installed driver and launching verified protocol executables.
+ Install a driver package for persistence.
  .
  Set KVLITE_SYSTEM_MODULE_PATH=/usr/lib/kvlite (installed by default in
  /etc/profile.d/kvlite.sh) and run `kvlite serve` or `kvlite module list`.
 
+Package: kvlite-leveldb
+Architecture: any
+Depends: kvlite, ${shlibs:Depends}, ${misc:Depends}
+Description: KVLite LevelDB storage driver bundle (pure Go)
+ The LevelDB engine as a versioned, checksummed module catalog. No engine
+ choice is made for you beyond this package: install it for persistence,
+ or serve memory straight from the host package.
+
 Package: kvlite-http
 Architecture: any
-Depends: kvlite-leveldb | kvlite-rocksdb, ${shlibs:Depends}, ${misc:Depends}
+Depends: kvlite, kvlite-leveldb | kvlite-rocksdb, ${shlibs:Depends}, ${misc:Depends}
 Description: KVLite standalone JSON/HTTP protocol module
  The kvlite-http executable module: a direct owner or an HTTP owner for
- attached Redis processes. Needs one installed kvlite driver package.
+ attached Redis processes. Needs the host plus one driver package.
 
 Package: kvlite-redis
 Architecture: any
-Depends: kvlite-leveldb | kvlite-rocksdb, ${shlibs:Depends}, ${misc:Depends}
+Depends: kvlite, kvlite-leveldb | kvlite-rocksdb, ${shlibs:Depends}, ${misc:Depends}
 Description: KVLite standalone Redis-compatible protocol module
  The kvlite-redis executable module: a direct owner or an attached process
- over an HTTP owner. Needs one installed kvlite driver package.
+ over an HTTP owner. Needs the host plus one driver package.
 
 # Uncomment for distros whose RocksDB development packages you have pinned;
 # set the dependency to your release's library name, e.g.
@@ -40,7 +49,7 @@ Description: KVLite standalone Redis-compatible protocol module
 #
 # Package: kvlite-rocksdb
 # Architecture: any
-# Depends: librocksdbX, ${shlibs:Depends}, ${misc:Depends}
+# Depends: kvlite, librocksdbX, ${shlibs:Depends}, ${misc:Depends}
 # Description: KVLite RocksDB storage driver (system engine)
 #  The RocksDB driver bundle for KVLite, composed with the distro engine:
 #  no engine code ships in this package. Any installed kvlite host drives

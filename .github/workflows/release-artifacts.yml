@@ -117,6 +117,7 @@ jobs:
             version="dev-${GITHUB_SHA:0:12}"
           fi
           go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/... ./examples/basic
+          make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=none
           make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=rocksdb
           make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=leveldb
           make release-http RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}"

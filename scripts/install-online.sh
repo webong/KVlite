@@ -11,8 +11,9 @@
 #
 # Options:
 #   --version VERSION   Release to install (default: latest)
-#   --driver NAME       Driver CLI linked as bin/kvlite: leveldb or rocksdb
-#                       (default: leveldb)
+#   --driver NAME       Persistent engine to install alongside the host:
+#                       leveldb or rocksdb (default: none, host only with
+#                       the ephemeral memory engine)
 #   --prefix DIR        Install prefix (default: /usr/local when writable,
 #                       otherwise $HOME/.local)
 #   --no-http           Skip the HTTP protocol module
@@ -44,7 +45,7 @@ usage() {
 }
 
 version="latest"
-driver="leveldb"
+driver=""
 prefix=""
 install_http=1
 install_redis=1
@@ -105,8 +106,8 @@ while (($# > 0)); do
 done
 
 case "$driver" in
-  leveldb|rocksdb) ;;
-  *) fail "unsupported driver: $driver (expected leveldb or rocksdb)" ;;
+  ""|leveldb|rocksdb) ;;
+  *) fail "unsupported driver: $driver (expected leveldb or rocksdb, or empty for host only)" ;;
 esac
 
 os_name="$(uname -s)"
@@ -205,14 +206,24 @@ fi
 if [[ "$install_redis" == "0" && -d "$work_root/$target/modules/redis" ]]; then
   rm -rf "$work_root/$target/modules/redis"
 fi
+# Prune every driver except the selected one. The default (no --driver) is
+# the pluggable-first base: host CLI plus protocols, memory only.
+if [[ -d "$work_root/$target/drivers" ]]; then
+  for bundle in "$work_root/$target"/drivers/*/; do
+    [[ -d "$bundle" ]] || continue
+    if [[ -z "$driver" || "$(basename "$bundle")" != "$driver" ]]; then
+      rm -rf "$bundle"
+    fi
+  done
+fi
+if [[ -n "$driver" && ! -d "$work_root/$target/drivers/$driver" ]]; then
+  fail "release $version_label for $target has no $driver driver bundle"
+fi
+[[ -d "$work_root/$target/host" ]] || fail "release $version_label for $target has no host bundle; upgrade the release"
 [[ -x "$work_root/scripts/install.sh" ]] || fail "release tarball is missing scripts/install.sh"
 
-bash "$work_root/scripts/install.sh" \
-  --prefix "$prefix" \
-  --from "$work_root" \
-  --version "$version_label" \
-  --target "$target" \
-  --link-cli "$driver"
+install_args=(--prefix "$prefix" --from "$work_root" --version "$version_label" --target "$target")
+bash "$work_root/scripts/install.sh" "${install_args[@]}"
 
 export_line="export KVLITE_SYSTEM_MODULE_PATH=\"$prefix/lib/kvlite\""
 if [[ "$configure_shell" == "1" ]]; then

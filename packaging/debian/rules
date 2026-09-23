@@ -1,8 +1,10 @@
 #!/usr/bin/make -f
 # Debian build for KVLite. Uses the repository's own release and install
-# scripts so the .deb contains exactly the verified layout (see
-# packaging/README.md). Only the pure-Go LevelDB driver is packaged here;
-# RocksDB needs its native toolchain and Berkeley DB stays excluded.
+# scripts so each .deb contains exactly the verified layout (see
+# packaging/README.md). The base kvlite package is the driverless host CLI;
+# every engine and protocol is a separate package that the host discovers.
+# Only the pure-Go LevelDB driver is packaged here; RocksDB needs its native
+# toolchain and Berkeley DB stays excluded.
 
 export CGO_ENABLED = 1
 export KVLITE_VERSION = $(shell dpkg-parsechangelog -S Version | sed 's/-[^-]*$$//')
@@ -11,36 +13,38 @@ export KVLITE_VERSION = $(shell dpkg-parsechangelog -S Version | sed 's/-[^-]*$$
 	dh $@
 
 override_dh_auto_build:
+	bash scripts/build-release.sh --version "$(KVLITE_VERSION)" --driver none
 	bash scripts/build-release.sh --version "$(KVLITE_VERSION)" --driver leveldb
 	bash scripts/build-release.sh --version "$(KVLITE_VERSION)" --extension http
 	bash scripts/build-release.sh --version "$(KVLITE_VERSION)" --extension redis
 
 override_dh_auto_install:
 	bash scripts/install.sh --prefix /usr --destdir debian/tmp \
-	  --version "$(KVLITE_VERSION)" --link-cli leveldb
+	  --version "$(KVLITE_VERSION)"
 	mkdir -p debian/tmp/etc/profile.d
 	printf 'export KVLITE_SYSTEM_MODULE_PATH="/usr/lib/kvlite"\n' \
 	  > debian/tmp/etc/profile.d/kvlite.sh
-	mkdir -p debian/kvlite-leveldb debian/kvlite-http debian/kvlite-redis
-	# Driver package: the CLI, its catalog bundle, the C header, notices,
-	# and the discovery default. Only bin/kvlite belongs to this package;
-	# protocol links ship with their own packages below.
-	mkdir -p debian/kvlite-leveldb/usr/bin debian/kvlite-leveldb/usr/include \
-	  debian/kvlite-leveldb/usr/lib/kvlite debian/kvlite-leveldb/usr/share/doc \
-	  debian/kvlite-leveldb/etc
-	cp debian/tmp/usr/bin/kvlite debian/kvlite-leveldb/usr/bin/
+	mkdir -p debian/kvlite debian/kvlite-leveldb debian/kvlite-http debian/kvlite-redis
+	# Base package: the host CLI plus the discovery default. No persistent
+	# engine ships here; memory is the only store until a driver lands.
+	mkdir -p debian/kvlite/usr/bin debian/kvlite/etc
+	cp debian/tmp/usr/bin/kvlite debian/kvlite/usr/bin/
+	cp -R debian/tmp/etc/* debian/kvlite/etc/
+	# Driver package: its catalog bundle, the C header, and notices. The
+	# host CLI from the base package drives it; no binary link is owned here.
+	mkdir -p debian/kvlite-leveldb/usr/include \
+	  debian/kvlite-leveldb/usr/lib/kvlite debian/kvlite-leveldb/usr/share/doc
 	cp debian/tmp/usr/include/kvlite.h debian/kvlite-leveldb/usr/include/
 	cp -R debian/tmp/usr/lib/kvlite/drivers debian/kvlite-leveldb/usr/lib/kvlite/
 	if [ -d debian/tmp/usr/share/doc/kvlite ]; then \
 	  cp -R debian/tmp/usr/share/doc/kvlite debian/kvlite-leveldb/usr/share/doc/; \
 	fi
-	cp -R debian/tmp/etc/* debian/kvlite-leveldb/etc/
-	# Protocol packages: their module bundles plus binary links.
+	# Protocol packages: their module bundles plus binary links. The
+	# discovery default ships only with the base package, never twice.
 	for ext in http redis; do \
 	  mkdir -p debian/kvlite-$$ext/usr/bin debian/kvlite-$$ext/usr/lib/kvlite/modules; \
 	  cp debian/tmp/usr/bin/kvlite-$$ext debian/kvlite-$$ext/usr/bin/; \
 	  cp -R debian/tmp/usr/lib/kvlite/modules/$$ext debian/kvlite-$$ext/usr/lib/kvlite/modules/; \
-	  cp -R debian/tmp/etc debian/kvlite-$$ext/; \
 	done
 
 override_dh_auto_test:

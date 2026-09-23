@@ -12,11 +12,14 @@
 #                       (the online installer sets this; DIR must contain
 #                       <target>/{drivers,modules} like a tarball root)
 #   --target OS-ARCH    Native target under dist/ (default: host)
-#   --component NAME    Install drivers or modules; repeat for both
-#                       (default: both when present)
-#   --link-cli DRIVER   Driver bundle whose CLI becomes bin/kvlite
-#                       (default: leveldb when installed, else the only
-#                       installed driver; required when several are present)
+#   --component NAME    Install drivers or modules; repeat for both.
+#                       Add "host" for the driverless host CLI
+#                       (default: host when present, then both when present)
+#   --link-cli DRIVER   Driver bundle whose CLI becomes bin/kvlite, when no
+#                       host CLI is installed. Defaults to the only installed
+#                       driver; required when several are present. Ignored
+#                       (with a warning) when a host CLI is installed, since
+#                       the host always owns bin/kvlite.
 #   --no-cli-link       Do not link bin/kvlite at all. For complement driver
 #                       packages: any installed kvlite CLI already drives
 #                       every installed driver bundle, so only one package
@@ -27,7 +30,9 @@
 # Layout (all bundle-internal paths stay relative, so DESTDIR packages and
 # relocated prefixes keep working):
 #
-#   <prefix>/bin/kvlite                 -> ../lib/kvlite/drivers/<driver>/bin/kvlite
+#   <prefix>/bin/kvlite                 host CLI (copied), or a link into
+#                                      ../lib/kvlite/drivers/<driver>/bin/kvlite
+#                                      when no host is installed
 #   <prefix>/bin/kvlite-http[.exe]     -> ../lib/kvlite/modules/http/bin/...
 #   <prefix>/bin/kvlite-redis[.exe]    -> ../lib/kvlite/modules/redis/bin/...
 #   <prefix>/lib/kvlite/drivers/*/     full driver bundles, intact
@@ -35,9 +40,17 @@
 #   <prefix>/include/kvlite.h          reviewed C ABI header
 #   <prefix>/share/doc/kvlite/<bundle>/ third-party notices per bundle
 #
-# Only one CLI can own bin/kvlite, so additional installed drivers are
-# reached through `kvlite module run` (or a packager's alternatives system).
+# The host CLI is the pluggable-first base: core plus the ephemeral memory
+# engine, discovering every installed driver and launching verified protocol
+# executables. Only one CLI ever owns bin/kvlite. Without a host, one driver
+# bundle's CLI takes the link (--link-cli); any further drivers are reached
+# through `kvlite module run` (or a packager's alternatives system).
 # After installing, point discovery at the catalog root:
+#
+#   export KVLITE_SYSTEM_MODULE_PATH="<prefix>/lib/kvlite"
+#
+# Package recipes should prefer that variable (or KVLITE_HOME for a user
+# install) over patching binaries. See packaging/README.md.
 #
 #   export KVLITE_SYSTEM_MODULE_PATH="<prefix>/lib/kvlite"
 #
@@ -120,20 +133,6 @@ while (($# > 0)); do
   esac
 done
 
-# ${#components[@]} is safe under set -u even when empty; expanding an empty
-# array with "${components[@]}" is not (pre-4.4 bash), so the loop only runs
-# when the array is known non-empty.
-if ((${#components[@]} > 0)); then
-  for component in "${components[@]}"; do
-    case "$component" in
-      drivers|modules) ;;
-      *) fail "unsupported component: $component (expected drivers or modules)" ;;
-    esac
-  done
-else
-  components=(drivers modules)
-fi
-
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 if [[ -z "$target" ]]; then
@@ -149,6 +148,25 @@ if [[ -n "$from" ]]; then
 fi
 [[ -d "$dist_root" ]] || fail "no release tree at $dist_root; build it first (make release ...)"
 
+# ${#components[@]} is safe under set -u even when empty; expanding an empty
+# array with "${components[@]}" is not (pre-4.4 bash), so the loop only runs
+# when the array is known non-empty.
+if ((${#components[@]} > 0)); then
+  for component in "${components[@]}"; do
+    case "$component" in
+      drivers|modules|host) ;;
+      *) fail "unsupported component: $component (expected drivers, modules, or host)" ;;
+    esac
+  done
+else
+  # A pluggable-first default: the host CLI when built, then every bundle
+  # kind present. No driver is ever preferred over another here.
+  components=()
+  if [[ -d "$dist_root/host" ]]; then components+=(host); fi
+  if [[ -d "$dist_root/drivers" ]]; then components+=(drivers); fi
+  if [[ -d "$dist_root/modules" ]]; then components+=(modules); fi
+fi
+
 want_component() {
   local wanted="$1"
   local component
@@ -163,6 +181,19 @@ dest_prefix="$destdir$prefix"
 catalog="$dest_prefix/lib/kvlite"
 installed_drivers=()
 installed_modules=()
+installed_host=0
+
+if want_component host && [[ -d "$dist_root/host" ]]; then
+  host_exe="kvlite"
+  [[ "$target" == windows-* ]] && host_exe="kvlite.exe"
+  [[ -x "$dist_root/host/bin/$host_exe" ]] || fail "host bundle has no executable bin/$host_exe"
+  mkdir -p "$dest_prefix/bin"
+  # The host CLI is a real binary, not a link: it is the one file every
+  # package agrees on, and later installs must never silently replace it.
+  cp "$dist_root/host/bin/$host_exe" "$dest_prefix/bin/$host_exe"
+  chmod 755 "$dest_prefix/bin/$host_exe"
+  installed_host=1
+fi
 
 if want_component drivers && [[ -d "$dist_root/drivers" ]]; then
   for bundle in "$dist_root"/drivers/*/; do
@@ -190,7 +221,7 @@ if want_component modules && [[ -d "$dist_root/modules" ]]; then
   done
 fi
 
-if ((${#installed_drivers[@]} == 0)) && ((${#installed_modules[@]} == 0)); then
+if ((${#installed_drivers[@]} == 0)) && ((${#installed_modules[@]} == 0)) && [[ "$installed_host" == "0" ]]; then
   fail "nothing to install from $dist_root for components (${components[*]})"
 fi
 
@@ -207,21 +238,24 @@ if ((${#installed_drivers[@]} > 0)); then
   done
 fi
 
-# One CLI owns bin/kvlite; every other binary links under its own name.
+# One CLI owns bin/kvlite. A host copy always wins and is never replaced
+# behind its back: later driver installs leave a foreign-owned binary alone
+# unless --link-cli explicitly overrides. Without a host, one driver
+# bundle's CLI takes the link (the only installed driver by default, an
+# explicit choice when several are present); no driver is preferred.
 mkdir -p "$dest_prefix/bin"
 link_target_driver="$link_cli"
+link_explicit=0
+if [[ -n "$link_cli" ]]; then link_explicit=1; fi
 if [[ "$no_cli_link" == "1" ]]; then
   link_target_driver=""
-elif [[ -z "$link_target_driver" ]] && ((${#installed_drivers[@]} > 0)); then
-  for driver in "${installed_drivers[@]}"; do
-    if [[ "$driver" == "leveldb" ]]; then
-      link_target_driver="leveldb"
-      break
-    fi
-  done
-  if [[ -z "$link_target_driver" && "${#installed_drivers[@]}" -eq 1 ]]; then
-    link_target_driver="${installed_drivers[0]}"
+elif [[ "$installed_host" == "1" ]]; then
+  if [[ "$link_explicit" == "1" ]]; then
+    printf 'install: warning: --link-cli ignored; the installed host CLI owns bin/kvlite\n' >&2
   fi
+  link_target_driver=""
+elif [[ -z "$link_target_driver" ]] && ((${#installed_drivers[@]} == 1)); then
+  link_target_driver="${installed_drivers[0]}"
 fi
 if [[ -n "$link_target_driver" ]]; then
   found=0
@@ -232,8 +266,8 @@ if [[ -n "$link_target_driver" ]]; then
   fi
   [[ "$found" == "1" ]] || fail "--link-cli $link_target_driver is not among the installed drivers"
 else
-  if ((${#installed_drivers[@]} > 1)); then
-    fail "several drivers installed; choose one with --link-cli for bin/kvlite"
+  if [[ "$link_explicit" == "0" ]] && ((${#installed_drivers[@]} > 1)); then
+    fail "several drivers installed and no host present; choose one with --link-cli for bin/kvlite"
   fi
 fi
 
@@ -256,7 +290,14 @@ if [[ -n "${link_target_driver:-}" ]]; then
     cli_name="kvlite.exe"
     cli_link="kvlite.exe"
   fi
-  link_binary "$cli_link" "../lib/kvlite/drivers/$link_target_driver/bin/$cli_name"
+  if [[ "$link_explicit" == "0" && -e "$dest_prefix/bin/$cli_link" && ! -L "$dest_prefix/bin/$cli_link" ]]; then
+    # A previous install owns bin/kvlite with a real binary (normally the
+    # host CLI). Never replace it implicitly; an explicit --link-cli still
+    # overrides because the packager asked for it by name.
+    printf 'install: bin/%s is owned by a previous install; leaving it alone (pass --link-cli to override)\n' "$cli_link" >&2
+  else
+    link_binary "$cli_link" "../lib/kvlite/drivers/$link_target_driver/bin/$cli_name"
+  fi
 fi
 if ((${#installed_modules[@]} > 0)); then
   for extension in "${installed_modules[@]}"; do

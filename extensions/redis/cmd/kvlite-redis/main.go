@@ -42,6 +42,9 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "kvlite-redis: --path is required in direct-owner mode (or use --upstream for shared-owner mode)")
 		return 2
 	}
+	if *driver == string(kvlite.DriverMemory) {
+		fmt.Fprintln(os.Stderr, "kvlite-redis: serving an ephemeral in-memory database; everything will be lost on exit")
+	}
 
 	dbOptions := make([]kvlite.Option, 0)
 	if *driver != "" {

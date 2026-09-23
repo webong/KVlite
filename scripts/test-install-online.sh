@@ -37,6 +37,7 @@ free_port() {
 }
 
 echo "install-online test: building release bundles" >&2
+bash "$repo_root/scripts/build-release.sh" --version latest --driver none >/dev/null
 bash "$repo_root/scripts/build-release.sh" --version latest --driver leveldb >/dev/null
 bash "$repo_root/scripts/build-release.sh" --version latest --extension http >/dev/null
 bash "$repo_root/scripts/build-release.sh" --version latest --extension redis >/dev/null
@@ -60,6 +61,7 @@ echo "install-online test: installing from asset server" >&2
 bash "$repo_root/scripts/install-online.sh" \
   --base-url "http://127.0.0.1:$port" \
   --prefix "$prefix" \
+  --driver leveldb \
   --yes >/dev/null || fail "online install failed"
 [[ -x "$prefix/bin/kvlite" && -x "$prefix/bin/kvlite-http" && -x "$prefix/bin/kvlite-redis" ]] || fail "installed binaries missing"
 
@@ -89,6 +91,17 @@ kill "$app_pid" 2>/dev/null || true
 wait "$app_pid" 2>/dev/null || true
 app_pid=""
 export KVLITE_SYSTEM_MODULE_PATH=""
+
+echo "install-online test: host-only default installs no persistent engine" >&2
+host_prefix="$work_root/host-prefix"
+bash "$repo_root/scripts/install-online.sh" \
+  --base-url "http://127.0.0.1:$port" \
+  --prefix "$host_prefix" \
+  --yes >/dev/null || fail "host-only online install failed"
+[[ -x "$host_prefix/bin/kvlite" ]] || fail "host binary missing"
+[[ ! -e "$host_prefix/lib/kvlite/drivers" ]] || fail "host-only install shipped a driver bundle"
+KVLITE_SYSTEM_MODULE_PATH="$host_prefix/lib/kvlite" KVLITE_MODULE_PATH="" KVLITE_HOME="" \
+  "$host_prefix/bin/kvlite" driver list | grep -q "^memory" || fail "host driver list missing memory"
 
 echo "install-online test: tampered tarball is rejected" >&2
 bad="$work_root/bad"

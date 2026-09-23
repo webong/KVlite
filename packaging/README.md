@@ -15,11 +15,13 @@ per-target tarballs plus a versioned installer script:
 curl -fsSL https://github.com/webong/KVlite/releases/latest/download/kvlite-installer.sh | bash
 ```
 
-Useful flags: `--version`, `--driver leveldb|rocksdb`, `--prefix`,
-`--no-http`, `--no-redis`, `--shell-rc`, `--yes`. The installer detects the
-platform, verifies the tarball checksum before unpacking, installs through
-the same `scripts/install.sh` path below, verifies every module, and prints
-the one export it needs (`KVLITE_SYSTEM_MODULE_PATH`). A tampered download
+That installs the pluggable-first base: host CLI plus protocol modules,
+memory only, no persistent engine. Add one with `--driver leveldb` (or
+`rocksdb`). Useful flags: `--version`, `--prefix`, `--no-http`,
+`--no-redis`, `--shell-rc`, `--yes`. The installer detects the platform,
+verifies the tarball checksum before unpacking, installs through the same
+`scripts/install.sh` path below, verifies every module, and prints the one
+export it needs (`KVLITE_SYSTEM_MODULE_PATH`). A tampered download
 is rejected before anything executes. `make test-install-online` covers the
 whole flow against a local asset server, including tamper rejection.
 
@@ -29,10 +31,11 @@ One installable package per bundle kind, so users install only what they run:
 
 | Package (example name) | Contents | Depends on |
 | --- | --- | --- |
-| `kvlite-leveldb` | `bin/kvlite`, driver bundle, `include/kvlite.h` | nothing (pure Go) |
-| `kvlite-rocksdb` | same shape for RocksDB | distro RocksDB/compression libs, or the `--bundle-runtime` output |
-| `kvlite-http` | `bin/kvlite-http` + bundle | any one `kvlite-*` driver package |
-| `kvlite-redis` | `bin/kvlite-redis` + bundle | any one `kvlite-*` driver package |
+| `kvlite` | driverless host `bin/kvlite` (core + memory) | nothing |
+| `kvlite-leveldb` | driver bundle, `include/kvlite.h` (no CLI link) | `kvlite` (host drives it) |
+| `kvlite-rocksdb` | same shape for RocksDB | `kvlite` + distro RocksDB/compression libs, or the `--bundle-runtime` output |
+| `kvlite-http` | `bin/kvlite-http` + bundle | `kvlite` + any one driver package (or memory) |
+| `kvlite-redis` | `bin/kvlite-redis` + bundle | `kvlite` + any one driver package (or memory) |
 
 Berkeley DB is never a normal package: it stays a separately licensed,
 explicitly enabled build (see `extensions/berkeleydb`).
