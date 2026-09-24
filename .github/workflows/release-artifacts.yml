@@ -119,7 +119,14 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" != 'tag' ]]; then
             version="dev-${GITHUB_SHA:0:12}"
           fi
-          go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/... ./examples/basic
+          # Core first WITHOUT the RocksDB tags: its driver-loader tests dlopen
+          # freshly built Go shared libraries, and a C++-linked (RocksDB)
+          # host corrupts the loaded module's heap on Intel macOS
+          # (deterministic bad-sweepgen fatal; ARM64/Linux tolerate it).
+          # This mirrors product topology, where C++ lives inside driver
+          # bundles and loading hosts stay lean.
+          go test . ./capi ./cmd/kvlite ./extensions/http/... ./extensions/redis/...
+          go test -tags 'rocksdb,kvlite_rocksdb' ./capi ./cmd/kvlite ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/... ./examples/basic
           make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=none
           make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=rocksdb
           make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=leveldb
