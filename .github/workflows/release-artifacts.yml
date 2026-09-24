@@ -23,7 +23,10 @@ jobs:
         include:
           - os: ubuntu-24.04
             target: linux-amd64
-          - os: macos-13
+          # macos-13 (the last Intel label before it) was retired by GitHub
+          # in December 2025; macos-15-intel is the final Intel macOS
+          # runner (itself retired August 2027). Revisit then.
+          - os: macos-15-intel
             target: darwin-amd64
           - os: macos-14
             target: darwin-arm64
