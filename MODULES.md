@@ -136,8 +136,21 @@ both, through one owner — is the protocol surface for one CLI invocation.
 This permits installed HTTP and Redis modules without relying on Go's
 toolchain-coupled `plugin` mechanism.
 
-## Installed release layout
+## Platform support
 
+Linked drivers, the C embedding ABI, and pure-C native modules work on
+every supported target. One combination does not: a Go host process loading
+a Go-built shared library on Intel macOS corrupts the heap deterministically
+(two Go runtimes cannot share the process there; ARM64 and Linux tolerate
+it). The loader therefore refuses `c-shared` loads on `darwin/amd64` with an
+actionable error instead of crashing — use a linked driver build there, or
+load the C ABI from a non-Go host (Python ctypes, Node N-API, PHP FFI and
+Rust all load the same libraries safely on every platform, Intel included).
+C-implemented drivers for Intel macOS should ship as `native-module` kind,
+which stays unguarded. `KVLITE_ALLOW_INTEL_DLOPEN=1` overrides the refusal
+for experiments, expecting crashes.
+
+## Installed release layout
 `scripts/build-release.sh` emits a checksummed `kvlite-module.json` with every
 bundle. A driver bundle is a prebuilt `libkvlite` C shared library and/or a
 `kvlite` host/CLI executable containing core plus that driver; language

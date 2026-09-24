@@ -14,6 +14,7 @@ import (
 )
 
 func TestOpenDriverFromRuntimeModule(t *testing.T) {
+	skipIntelGoModule(t)
 	db := openRuntimeModuleDB(t, t.TempDir())
 
 	ctx := context.Background()
@@ -37,6 +38,7 @@ func TestOpenDriverFromRuntimeModule(t *testing.T) {
 }
 
 func TestRuntimeModuleDriverRawRecordStore(t *testing.T) {
+	skipIntelGoModule(t)
 	db := openRuntimeModuleDB(t, t.TempDir())
 	ctx := context.Background()
 	store := db.Transport()
@@ -154,8 +156,18 @@ func openRuntimeModuleDB(t *testing.T, root string) *DB {
 	return db
 }
 
-func testSharedLibraryName() string {
-	switch runtime.GOOS {
+// skipIntelGoModule skips tests that dlopen Go-built shared libraries on
+// Intel macOS, where two Go runtimes in one process corrupt the heap
+// deterministically (see openModuleSharedLibrary). Pure-C native modules
+// are unaffected and keep running there.
+func skipIntelGoModule(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "amd64" && os.Getenv("KVLITE_ALLOW_INTEL_DLOPEN") == "" {
+		t.Skip("Go driver modules cannot load on Intel macOS; use a linked driver build there")
+	}
+}
+
+func testSharedLibraryName() string {	switch runtime.GOOS {
 	case "darwin":
 		return "libkvlite.dylib"
 	case "windows":

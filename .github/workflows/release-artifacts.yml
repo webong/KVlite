@@ -134,6 +134,10 @@ jobs:
           make release-redis RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}"
 
       - name: Standalone extension integration (LevelDB)
+        # Go hosts cannot load Go driver modules on Intel macOS (see
+        # MODULES.md "Platform support"); builds and verification below
+        # still cover that target.
+        if: matrix.target != 'darwin-amd64'
         shell: bash
         run: make test-standalone-modules
 
@@ -178,6 +182,8 @@ jobs:
           ./dist/"$version"/"${{ matrix.target }}"/drivers/rocksdb/bin/kvlite module verify rocksdb
 
       - name: Standalone extension integration (RocksDB)
+        # See above: no Go-module dynamic serving on Intel macOS.
+        if: matrix.target != 'darwin-amd64'
         shell: bash
         run: |
           export CGO_CFLAGS="-I${KVLITE_ROCKSDB_PREFIX}/include"

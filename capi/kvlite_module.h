@@ -22,6 +22,10 @@
  * - Status codes reuse capi/kvlite.h: 0 ok, 1 not found, 2 invalid argument,
  *   3 storage error. Scan exhaustion is reported as not found (1) with no
  *   error text, exactly like kvlite_raw_scan_next.
+ * - Implement modules in C (or another non-Go language). A Go-built module
+ *   carries a second Go runtime, and two Go runtimes in one process corrupt
+ *   the heap on Intel macOS; Go hosts therefore refuse Go-module loads
+ *   there. C modules load everywhere the loader runs.
  * - Memory returned through out_value/out_key pointers is released with the
  *   module's own free function from the same operation table.
  * - Operation tables must stay valid for the process lifetime. The host
