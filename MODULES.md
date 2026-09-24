@@ -111,11 +111,16 @@ IPC. Two direct owners must never open the same directory at once.
 When HTTP and Redis must serve the *same* directory, use the shared-owner
 topology instead: one `kvlite-http` owner holds the single writable copy of
 the directory, and `kvlite-redis --upstream <owner-url>` attaches to it over
-the owner's loopback HTTP protocol. The owner must outlive attached
+the owner's loopback HTTP protocol. The owner must be available for attached
 processes; per-command failures (owner down, token rejected) surface as Redis
 `ERR` replies without stopping the server. Attached multi-step commands are
 not atomic — each record operation crosses the transport separately — so use a
 direct owner when commands must observe one coherent snapshot.
+
+When started separately, attached Redis stays up during an owner outage and
+resumes requests if the owner restarts at the same URL. When the CLI starts
+both processes, it stops Redis and exits with an error if its HTTP owner dies.
+The standalone integration suite exercises both lifecycles.
 
 ```bash
 kvlite-http --path ./data --driver leveldb --listen 127.0.0.1:8089 --token "$KVLITE_TOKEN" &
@@ -245,6 +250,11 @@ looks like:
   ]
 }
 ```
+
+The loader requires the registered driver to advertise `embedded-storage`
+and every capability declared by its installed manifest. It rejects a
+mismatch before registering the driver. Manifests using an older or newer
+module ABI are rejected before their libraries are loaded.
 
 `Open` prefers a linked driver, then an installed C-shared bundle, then an
 installed native module; a missing driver still reports the usual

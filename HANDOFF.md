@@ -6,22 +6,22 @@ before this handoff document was added
 
 > **Status updated 2026-09-24:** The release packaging and integration work
 > in phases 1–3 landed on `main` (commits `20a4cee` and `6941ce9`). The optional
-> shared-owner and native-module phases have working implementations, with
-> lifecycle and compatibility hardening still open. Phases 1–2 also exposed
-> engine operations routed through logical C ABI calls; additive
+> shared-owner and native-module phases have working implementations. Phases
+> 1–2 also exposed an engine layering bug; additive
 > `kvlite_raw_*` symbols fixed that layering bug. Phase 4 uses an
-> HTTP-owner/attached-Redis
-> topology with CLI orchestration; owner crash/restart behavior still needs
-> coverage. Phase 5 added the `kvlite_module_init_v1` ABI
+> HTTP-owner/attached-Redis topology with CLI orchestration. A later lifecycle
+> test covers owner outage and restart, and the CLI stops Redis if its owner
+> dies. Phase 5 added the `kvlite_module_init_v1` ABI
 > (`capi/kvlite_module.h`) with a pure-C reference module. Self-contained
 > installs shipped as `--bundle-runtime` plus license-notice gating.
 > One behavior the plan assumed did not survive contact with reality:
 > loaded Go shared libraries are never unloaded (a Go runtime cannot be torn
 > down safely; `dlclose` hung the process), so module libraries stay mapped
-> for the process lifetime. Remaining checks: native-module capability
-> negotiation and cross-version ABI tests; native CI proof for the first real
-> RocksDB runtime bundle; Windows runtime-bundle proof; and release signing
-> beyond checksums.
+> for the process lifetime. The native loader now checks registered
+> capabilities against the manifest, and public `Open` tests cover older and
+> newer module ABI manifests. Remaining checks: native CI proof for the first
+> real RocksDB runtime bundle; Windows runtime-bundle proof; and release
+> signing beyond checksums.
 
 ## Purpose
 

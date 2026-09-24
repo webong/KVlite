@@ -21,6 +21,11 @@ kvlite-redis --upstream http://127.0.0.1:8089 --upstream-token "$KVLITE_TOKEN" \
   --upstream-driver leveldb --listen 127.0.0.1:6379
 ```
 
+If that owner goes offline, attached Redis returns a command error and keeps
+its listener open. It resumes requests when the owner restarts at the same
+URL. If one `kvlite serve` command launched both processes, the CLI stops
+Redis when the owner exits.
+
 Attached multi-step commands are not atomic (each record operation crosses
 the transport separately). In Go, `Serve` owns an embedded database while
 `ServeRemote` serves from a remote handle such as `kvlitehttp.Connect`:

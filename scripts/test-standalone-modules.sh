@@ -298,6 +298,46 @@ PYEOF
 [[ -f "$shared_db/KVLITE-MANIFEST.json" ]] || fail "shared database has no manifest"
 grep -q "upstream=http" "$work_root/attached.log" || fail "attached redis did not report its upstream"
 
+echo "standalone-modules test: attached Redis survives owner outage and reconnects after restart" >&2
+kill "$owner_pid"
+wait "$owner_pid" 2>/dev/null || true
+owner_pid=""
+python3 - <<'PYEOF'
+import os, socket
+port = int(os.environ["KVLITE_ATTACHED_PORT"])
+with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+    sock.sendall(b"*2\r\n$3\r\nGET\r\n$10\r\nshared-key\r\n")
+    reply = sock.makefile("rb").readline().decode()
+    assert reply.startswith("-ERR "), "owner outage reply = " + reply
+PYEOF
+kill -0 "$attached_pid" 2>/dev/null || fail "attached Redis exited when the owner stopped"
+"$http_bin" --path "$shared_db" --driver "$driver" --listen "127.0.0.1:$owner_port" >"$work_root/owner-restarted.log" 2>&1 &
+owner_pid=$!
+owner_ready=0
+for _ in $(seq 1 100); do
+  if curl -fsS "http://127.0.0.1:$owner_port/v1/health" >/dev/null 2>&1; then owner_ready=1; break; fi
+  sleep 0.2
+done
+[[ "$owner_ready" == "1" ]] || { cat "$work_root/owner-restarted.log" >&2; fail "HTTP owner did not restart"; }
+python3 - <<'PYEOF'
+import os, socket
+port = int(os.environ["KVLITE_ATTACHED_PORT"])
+def cmd(*args):
+    parts = [("*%d\r\n" % len(args)).encode()]
+    for arg in args:
+        value = arg.encode()
+        parts.append(("$%d\r\n" % len(value)).encode() + value + b"\r\n")
+    return b"".join(parts)
+with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+    reader = sock.makefile("rb")
+    sock.sendall(cmd("GET", "shared-key"))
+    size = int(reader.readline()[1:].strip())
+    assert reader.read(size + 2)[:-2] == b'{"shared":"owner"}', "attached Redis did not reconnect"
+    sock.sendall(cmd("GET", "attached-key"))
+    size = int(reader.readline()[1:].strip())
+    assert reader.read(size + 2)[:-2] == b"attached-value", "attached write did not persist"
+PYEOF
+
 echo "standalone-modules test: attached Redis rejects a bad owner token" >&2
 token_owner_port="$(free_port)"
 "$http_bin" --path "$work_root/token-data" --driver "$driver" --listen "127.0.0.1:$token_owner_port" --token secret >"$work_root/token-owner.log" 2>&1 &
@@ -361,4 +401,4 @@ assert body == '{"served":"both"}', "orchestrated GET body = " + body
 s.close()
 PYEOF
 
-echo "standalone-modules test: ok ($driver + http put/get/scan + redis strings/hashes + shared owner/attached + cli orchestration + missing-driver + cli standalone)" >&2
+echo "standalone-modules test: ok ($driver + http put/get/scan + redis strings/hashes + shared owner/restart + cli orchestration + missing-driver + cli standalone)" >&2

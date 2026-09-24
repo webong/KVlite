@@ -329,11 +329,15 @@ func runServeStandaloneBoth(path, driver, listen, token string, maxRequestBytes 
 		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
 		return 1
 	}
+	ownerExited := make(chan struct{})
+	go func() {
+		_ = owner.Wait()
+		close(ownerExited)
+	}()
 	ownerURL := "http://" + listen
-	if !waitForOwnerHealth(ownerURL, token, owner) {
-		// The health waiter already reaped the owner; Kill is a no-op if the
-		// process is gone.
+	if !waitForOwnerHealth(ownerURL, token, ownerExited) {
 		_ = owner.Process.Kill()
+		<-ownerExited
 		return 1
 	}
 	attachedArgs := []string{
@@ -354,9 +358,10 @@ func runServeStandaloneBoth(path, driver, listen, token string, maxRequestBytes 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kvlite: %v\n", err)
 		_ = owner.Process.Kill()
+		<-ownerExited
 		return 1
 	}
-	status := waitForAttachedModule(owner, attached)
+	status := waitForAttachedModule(owner, ownerExited, attached)
 	return status
 }
 
@@ -447,17 +452,12 @@ func requireExplicitServePort(address, flagName string) error {
 // waitForOwnerHealth polls the owner's health endpoint until it answers or
 // the owner process exits. It reports false when the owner never becomes
 // ready so the caller can stop waiting and surface the owner's own logs.
-func waitForOwnerHealth(ownerURL, token string, owner *exec.Cmd) bool {
-	exited := make(chan struct{})
-	go func() {
-		_, _ = owner.Process.Wait()
-		close(exited)
-	}()
+func waitForOwnerHealth(ownerURL, token string, ownerExited <-chan struct{}) bool {
 	client := &http.Client{Timeout: 5 * time.Second}
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
-		case <-exited:
+		case <-ownerExited:
 			fmt.Fprintln(os.Stderr, "kvlite: HTTP owner module exited before becoming ready")
 			return false
 		default:
@@ -478,7 +478,7 @@ func waitForOwnerHealth(ownerURL, token string, owner *exec.Cmd) bool {
 			}
 		}
 		select {
-		case <-exited:
+		case <-ownerExited:
 			fmt.Fprintln(os.Stderr, "kvlite: HTTP owner module exited before becoming ready")
 			return false
 		case <-time.After(200 * time.Millisecond):
@@ -488,36 +488,47 @@ func waitForOwnerHealth(ownerURL, token string, owner *exec.Cmd) bool {
 	return false
 }
 
-// waitForAttachedModule waits for the attached Redis process while forwarding
-// signals to both children. The owner is always stopped before returning.
-func waitForAttachedModule(owner, attached *exec.Cmd) int {
+// waitForAttachedModule supervises the shared-owner topology. If the owner
+// exits first, Redis is stopped so it cannot keep accepting requests for a
+// database that no longer has an owner.
+func waitForAttachedModule(owner *exec.Cmd, ownerExited <-chan struct{}, attached *exec.Cmd) int {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signals)
-	stop := make(chan struct{})
-	defer close(stop)
+	attachedExited := make(chan error, 1)
 	go func() {
+		attachedExited <- attached.Wait()
+	}()
+	stopping := false
+	for {
 		select {
+		case <-ownerExited:
+			_ = attached.Process.Kill()
+			waitErr := <-attachedExited
+			if stopping && waitErr == nil {
+				return 0
+			}
+			fmt.Fprintln(os.Stderr, "kvlite: HTTP owner module exited; stopped attached Redis module")
+			return 1
+		case waitErr := <-attachedExited:
+			_ = owner.Process.Kill()
+			<-ownerExited
+			if waitErr != nil {
+				if exitErr, ok := waitErr.(*exec.ExitError); ok {
+					if status := exitErr.ProcessState.ExitCode(); status > 0 {
+						return status
+					}
+				}
+				fmt.Fprintf(os.Stderr, "kvlite: attached redis module exited with error: %v\n", waitErr)
+				return 1
+			}
+			return 0
 		case sig := <-signals:
+			stopping = true
 			_ = attached.Process.Signal(sig)
 			_ = owner.Process.Signal(sig)
-		case <-stop:
 		}
-	}()
-	waitErr := attached.Wait()
-	// The health waiter reaps the owner in the background; Kill stops a live
-	// owner and is a no-op otherwise.
-	_ = owner.Process.Kill()
-	if waitErr != nil {
-		if exitErr, ok := waitErr.(*exec.ExitError); ok {
-			if status := exitErr.ProcessState.ExitCode(); status > 0 {
-				return status
-			}
-		}
-		fmt.Fprintf(os.Stderr, "kvlite: attached redis module exited with error: %v\n", waitErr)
-		return 1
 	}
-	return 0
 }
 
 type driverPathValues struct {

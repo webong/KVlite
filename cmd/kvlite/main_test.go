@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/webong/kvlite"
 	kvliteredis "github.com/webong/kvlite/extensions/redis"
@@ -489,6 +492,7 @@ func main() {
 		panic(err)
 	}
 }
+
 `, httpMarkerPath, `{"status":"ok"}`)
 	buildFakeModule(t, root, "http", []string{"http-client", "http-server"}, ownerProgram)
 
@@ -551,6 +555,119 @@ func main() {
 	if string(written) != "http://"+ownerListen {
 		t.Fatalf("attached redis marker contains %q, want %q", string(written), "http://"+ownerListen)
 	}
+}
+
+func TestServeStandaloneBothStopsRedisWhenOwnerExits(t *testing.T) {
+	if runtime.GOOS == "windows" || runtime.GOOS == "js" || runtime.GOOS == "wasip1" {
+		t.Skip("process and loopback lifecycle test requires Unix-style process signals")
+	}
+	root := t.TempDir()
+	stopOwner := filepath.Join(root, "stop-owner")
+	redisPID := filepath.Join(root, "redis.pid")
+
+	ownerProgram := fmt.Sprintf(`
+package main
+import ("flag"; "net/http"; "os"; "time")
+func main() {
+	flags := flag.NewFlagSet("owner", flag.ExitOnError)
+	listen := flags.String("listen", "", "")
+	_ = flags.String("path", "", "")
+	_ = flags.String("driver", "", "")
+	_ = flags.String("token", "", "")
+	_ = flags.Int64("max-request-bytes", 0, "")
+	flags.Parse(os.Args[1:])
+	go func() {
+		for {
+			if _, err := os.Stat(%q); err == nil { os.Exit(23) }
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	http.HandleFunc("/v1/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	if err := http.ListenAndServe(*listen, nil); err != nil { panic(err) }
+}
+`, stopOwner)
+	buildFakeModule(t, root, "http", []string{"http-client", "http-server"}, ownerProgram)
+
+	attachedProgram := fmt.Sprintf(`
+package main
+import ("flag"; "net"; "os"; "strconv")
+func main() {
+	flags := flag.NewFlagSet("attached", flag.ExitOnError)
+	listen := flags.String("listen", "", "")
+	_ = flags.String("upstream", "", "")
+	_ = flags.String("upstream-token", "", "")
+	_ = flags.String("upstream-driver", "", "")
+	_ = flags.String("password", "", "")
+	flags.Parse(os.Args[1:])
+	listener, err := net.Listen("tcp", *listen)
+	if err != nil { panic(err) }
+	defer listener.Close()
+	if err := os.WriteFile(%q, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil { panic(err) }
+	for { conn, err := listener.Accept(); if err != nil { return }; conn.Close() }
+}
+`, redisPID)
+	buildFakeModule(t, root, "redis", []string{"redis-resp2", "redis-server"}, attachedProgram)
+
+	reserveAddress := func() string {
+		t.Helper()
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		address := listener.Addr().String()
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return address
+	}
+	ownerAddress, redisAddress := reserveAddress(), reserveAddress()
+	t.Setenv("KVLITE_MODULE_PATH", root)
+	t.Setenv("KVLITE_HOME", "")
+	finished := make(chan int, 1)
+	go func() {
+		finished <- run([]string{"serve", "--path", filepath.Join(root, "data"), "--extension-mode", "standalone", "--listen", ownerAddress, "--redis-listen", redisAddress})
+	}()
+	cleanupNeeded := true
+	t.Cleanup(func() {
+		if !cleanupNeeded {
+			return
+		}
+		_ = os.WriteFile(stopOwner, nil, 0o600)
+		if raw, err := os.ReadFile(redisPID); err == nil {
+			if pid, err := strconv.Atoi(string(raw)); err == nil {
+				if process, err := os.FindProcess(pid); err == nil {
+					_ = process.Kill()
+				}
+			}
+		}
+	})
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(redisPID); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := os.Stat(redisPID); err != nil {
+		t.Fatalf("attached Redis did not start: %v", err)
+	}
+	if err := os.WriteFile(stopOwner, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case status := <-finished:
+		if status == 0 {
+			t.Fatal("CLI returned success after its HTTP owner exited")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("CLI kept attached Redis running after its HTTP owner exited")
+	}
+	conn, err := net.DialTimeout("tcp", redisAddress, 100*time.Millisecond)
+	if err == nil {
+		conn.Close()
+		t.Fatal("attached Redis still accepts connections after its owner exited")
+	}
+	cleanupNeeded = false
 }
 
 func TestServeStandaloneBothRequiresExplicitPorts(t *testing.T) {

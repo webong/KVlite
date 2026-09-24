@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +38,7 @@ func TestNativeModuleDriverLoad(t *testing.T) {
 	manifest := testExtensionManifest("memdb")
 	manifest.Kind = ModuleKindDriver
 	manifest.Driver = "memdb"
+	manifest.Capabilities = []string{"embedded-storage"}
 	manifest.Artifacts = []ModuleArtifact{{
 		Platform: runtime.GOOS + "-" + runtime.GOARCH,
 		Kind:     ModuleArtifactNative,
@@ -146,6 +149,80 @@ func TestNativeModuleDriverRejectsUnknownSymbol(t *testing.T) {
 	}
 }
 
+func TestNativeModuleDriverRejectsUnprovidedCapability(t *testing.T) {
+	artifactPath := buildNativeFixtureForDriver(t, "memdb-capabilities")
+	payload, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moduleDirectory := filepath.Join(t.TempDir(), "memdb-capabilities")
+	if err := os.MkdirAll(moduleDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	relPath := "memdb" + nativeFixtureExtension()
+	if err := os.WriteFile(filepath.Join(moduleDirectory, relPath), payload, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	checksum := sha256.Sum256(payload)
+	manifest := testExtensionManifest("memdb-capabilities")
+	manifest.Kind = ModuleKindDriver
+	manifest.Driver = "memdb-capabilities"
+	manifest.Capabilities = []string{"embedded-storage", "snapshot-scan"}
+	manifest.Artifacts = []ModuleArtifact{{
+		Platform: runtime.GOOS + "-" + runtime.GOARCH,
+		Kind:     ModuleArtifactNative,
+		Path:     relPath,
+		SHA256:   hex.EncodeToString(checksum[:]),
+		Symbol:   "kvlite_module_init_v1",
+	}}
+	writeTestModuleManifest(t, moduleDirectory, manifest)
+	t.Setenv("KVLITE_MODULE_PATH", filepath.Dir(moduleDirectory))
+	t.Setenv("KVLITE_HOME", "")
+
+	_, err = Open(filepath.Join(t.TempDir(), "data"), WithDriver("memdb-capabilities"))
+	if !errors.Is(err, ErrModuleIncompatible) || !strings.Contains(err.Error(), "snapshot-scan") {
+		t.Fatalf("Open() error = %v, want incompatible missing snapshot-scan capability", err)
+	}
+}
+
+func TestNativeModuleDriverRejectsIncompatibleModuleABI(t *testing.T) {
+	for _, version := range []int{0, ModuleABIVersion + 1} {
+		t.Run(fmt.Sprintf("module-abi-%d", version), func(t *testing.T) {
+			name := fmt.Sprintf("memdb-abi-%d", version)
+			moduleDirectory := filepath.Join(t.TempDir(), name)
+			if err := os.MkdirAll(moduleDirectory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			payload := []byte("module must be rejected before loading")
+			artifactName := "module" + nativeFixtureExtension()
+			if err := os.WriteFile(filepath.Join(moduleDirectory, artifactName), payload, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			checksum := sha256.Sum256(payload)
+			manifest := testExtensionManifest(name)
+			manifest.Kind = ModuleKindDriver
+			manifest.Driver = DriverName(name)
+			manifest.Capabilities = []string{"embedded-storage"}
+			manifest.ModuleABI = version
+			manifest.Artifacts = []ModuleArtifact{{
+				Platform: runtime.GOOS + "-" + runtime.GOARCH,
+				Kind:     ModuleArtifactNative,
+				Path:     artifactName,
+				SHA256:   hex.EncodeToString(checksum[:]),
+				Symbol:   "kvlite_module_init_v1",
+			}}
+			writeTestModuleManifest(t, moduleDirectory, manifest)
+			t.Setenv("KVLITE_MODULE_PATH", filepath.Dir(moduleDirectory))
+			t.Setenv("KVLITE_HOME", "")
+
+			_, err := Open(filepath.Join(t.TempDir(), "data"), WithDriver(name))
+			if !errors.Is(err, ErrModuleIncompatible) {
+				t.Fatalf("Open() with module ABI %d = %v, want ErrModuleIncompatible", version, err)
+			}
+		})
+	}
+}
+
 func nativeFixtureExtension() string {
 	switch runtime.GOOS {
 	case "darwin":
@@ -161,6 +238,10 @@ func nativeFixtureExtension() string {
 // compiler and returns the shared-library path. It skips when no compiler is
 // available.
 func buildNativeFixture(t *testing.T) string {
+	return buildNativeFixtureForDriver(t, "memdb")
+}
+
+func buildNativeFixtureForDriver(t *testing.T, driver string) string {
 	t.Helper()
 	if _, err := exec.LookPath("cc"); err != nil {
 		t.Skip("system C compiler (cc) is not available")
@@ -171,6 +252,7 @@ func buildNativeFixture(t *testing.T) string {
 	if runtime.GOOS == "darwin" {
 		args = []string{"-dynamiclib", "-fPIC", "-O2", "-o", output, source}
 	}
+	args = append([]string{"-DKVLITE_TEST_DRIVER_NAME=\"" + driver + "\""}, args...)
 	if output, err := exec.Command("cc", args...).CombinedOutput(); err != nil {
 		t.Skipf("system C compiler cannot build the fixture: %v: %s", err, output)
 	}

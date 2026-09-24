@@ -302,9 +302,8 @@ type nativeModuleRegistration struct {
 // nativeModuleDriver adapts one native-module driver registration to the
 // in-process Driver interface so Open resolves it like a linked driver.
 type nativeModuleDriver struct {
-	library      *nativeModuleLibrary
-	info         DriverInfo
-	registration nativeModuleRegistration
+	library *nativeModuleLibrary
+	info    DriverInfo
 }
 
 var nativeModuleLoads = struct {
@@ -323,7 +322,7 @@ func openNativeModuleDriver(path string, module Module, options DriverOptions) (
 	if err != nil {
 		return nil, err
 	}
-	library, selected, err := loadNativeModuleLibrary(module, wanted)
+	library, _, err := loadNativeModuleLibrary(module, wanted)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +340,6 @@ func openNativeModuleDriver(path string, module Module, options DriverOptions) (
 			Version:        version,
 			Available:      true,
 		},
-		registration: selected,
 	}
 	if err := RegisterDriver(driver); err != nil {
 		return nil, fmt.Errorf("kvlite: register native driver %q: %w", wanted, err)
@@ -391,6 +389,9 @@ func loadNativeModuleLibrary(module Module, wanted DriverName) (*nativeModuleLib
 		return nil, selected, fmt.Errorf("%w: native module %q did not register driver %q", ErrModuleIncompatible, module.Manifest.Name, wanted)
 	}
 	selected = registrations[matched]
+	if err := validateNativeCapabilities(module.Manifest, selected); err != nil {
+		return nil, selected, err
+	}
 	// Copy the selected operation table into heap state kept with the
 	// library. The module itself stays loaded, so the function pointers
 	// remain valid for the process lifetime.
@@ -400,6 +401,20 @@ func loadNativeModuleLibrary(module Module, wanted DriverName) (*nativeModuleLib
 	library.state.registrations = nil
 	library.state.error = nil
 	return library, selected, nil
+}
+
+func validateNativeCapabilities(manifest ModuleManifest, registration nativeModuleRegistration) error {
+	offered := make(map[string]struct{}, len(registration.capabilities))
+	for _, capability := range registration.capabilities {
+		offered[capability] = struct{}{}
+	}
+	required := append([]string{"embedded-storage"}, manifest.Capabilities...)
+	for _, capability := range required {
+		if _, found := offered[capability]; !found {
+			return fmt.Errorf("%w: native module %q registered driver %q without declared capability %q", ErrModuleIncompatible, manifest.Name, registration.driver, capability)
+		}
+	}
+	return nil
 }
 
 // readNativeRegistrations walks the C registration list once, copying every

@@ -87,7 +87,12 @@ typedef struct {
     const char *version;
     /* Driver name selected with WithDriver, e.g. "memdb". */
     const char *driver;
-    /* Comma-separated capability tokens, e.g. "embedded-storage". May be NULL. */
+    /*
+     * Comma-separated capability tokens. Driver modules must provide
+     * "embedded-storage" and every capability declared in their installed
+     * manifest. Additional tokens are optional. The host checks these
+     * claims before making the driver available.
+     */
     const char *capabilities;
 } kvlite_module_info_v1;
 

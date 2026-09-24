@@ -18,6 +18,10 @@
 
 #include "../../kvlite_module.h"
 
+#ifndef KVLITE_TEST_DRIVER_NAME
+#define KVLITE_TEST_DRIVER_NAME "memdb"
+#endif
+
 typedef struct {
     unsigned char *key;
     size_t key_length;
@@ -355,9 +359,9 @@ static const kvlite_driver_ops_v1 memdb_ops = {
 };
 
 static const kvlite_module_info_v1 memdb_info = {
-    "memdb",
+    KVLITE_TEST_DRIVER_NAME,
     "v0.1.0",
-    "memdb",
+    KVLITE_TEST_DRIVER_NAME,
     "embedded-storage"
 };
 
