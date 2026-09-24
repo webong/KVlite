@@ -167,7 +167,8 @@ func skipIntelGoModule(t *testing.T) {
 	}
 }
 
-func testSharedLibraryName() string {	switch runtime.GOOS {
+func testSharedLibraryName() string {
+	switch runtime.GOOS {
 	case "darwin":
 		return "libkvlite.dylib"
 	case "windows":

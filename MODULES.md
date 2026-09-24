@@ -76,10 +76,10 @@ driver name and the server resolves only an installed, server-owned mapping.
 A missing driver returns `driver_not_installed`; an installed but unexposed one
 returns `driver_not_exposed`. Remote clients never choose a filesystem path.
 
-For in-process calls, local `WithDriver` resolution now also checks installed
-driver modules. If a discoverable module matches the requested name, KVLite
-returns a dedicated error that tells you the module is present but not linked into
-the current process.
+For in-process calls, local `WithDriver` resolution checks installed driver
+modules. A matching, verified C-shared or native module can be loaded at
+runtime when supported on the current platform; an unavailable or incompatible
+artifact returns an actionable error. See Platform support below.
 
 When KVLite adds named remote database creation, that same request will select
 the initial driver and persist it in the database manifest. Later requests for
@@ -253,12 +253,11 @@ unsupported by design.
 
 ## Source layout
 
-All optional source modules now live under `extensions/*`: RocksDB, LevelDB,
-Berkeley DB, HTTP, and Redis. Linked Go modules
-register the same metadata as their standalone bundles. This keeps the normal
-Go development workflow working while giving all consumers one catalog format.
-A future native-module loader will use a stable C initialization function (for
-example `kvlite_module_init_v1`), not Go runtime plugins.
+All optional source modules live under `extensions/*`: RocksDB, LevelDB,
+Berkeley DB, HTTP, and Redis. Linked Go modules register the same metadata as
+their standalone bundles. Native driver modules use the implemented
+`kvlite_module_init_v1` C entry point described above. Go runtime plugins are
+not part of the module contract.
 
 `extensions/berkeleydb` is a CGo adapter, not a Berkeley DB binary
 distribution. It does not change licensing for any other KVLite module and is

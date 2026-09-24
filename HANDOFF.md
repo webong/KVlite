@@ -4,23 +4,24 @@
 **Repository baseline inspected:** `main` at `c842cbe` (`origin/main`), clean
 before this handoff document was added
 
-> **Status 2026-09-05: closed.** Every phase below landed on `main`
-> (commits `20a4cee` and `6941ce9`, pushed). What changed versus the plan:
-> Phase 1–2 shipped as specified, plus a latent layering bug the work exposed
-> (engine operations routed through logical C ABI calls; fixed with additive
-> raw `kvlite_raw_*` symbols). Phase 4 shipped as an HTTP-owner/attached-Redis
-> topology with CLI orchestration instead of a new IPC wire protocol.
-> Phase 5 shipped as the frozen `kvlite_module_init_v1` ABI
+> **Status updated 2026-09-24:** The release packaging and integration work
+> in phases 1–3 landed on `main` (commits `20a4cee` and `6941ce9`). The optional
+> shared-owner and native-module phases have working implementations, with
+> lifecycle and compatibility hardening still open. Phases 1–2 also exposed
+> engine operations routed through logical C ABI calls; additive
+> `kvlite_raw_*` symbols fixed that layering bug. Phase 4 uses an
+> HTTP-owner/attached-Redis
+> topology with CLI orchestration; owner crash/restart behavior still needs
+> coverage. Phase 5 added the `kvlite_module_init_v1` ABI
 > (`capi/kvlite_module.h`) with a pure-C reference module. Self-contained
 > installs shipped as `--bundle-runtime` plus license-notice gating.
 > One behavior the plan assumed did not survive contact with reality:
 > loaded Go shared libraries are never unloaded (a Go runtime cannot be torn
 > down safely; `dlclose` hung the process), so module libraries stay mapped
-> for the process lifetime. Residual, all tracked outside this document:
-> CI runs the new suites (wired, awaiting runner proof), the first real
-> RocksDB runtime bundle is unproven until native CI runs it, Windows runtime
-> bundling is explicitly unsupported, and release signing (beyond checksums)
-> is still open.
+> for the process lifetime. Remaining checks: native-module capability
+> negotiation and cross-version ABI tests; native CI proof for the first real
+> RocksDB runtime bundle; Windows runtime-bundle proof; and release signing
+> beyond checksums.
 
 ## Purpose
 

@@ -51,11 +51,6 @@
 #
 # Package recipes should prefer that variable (or KVLITE_HOME for a user
 # install) over patching binaries. See packaging/README.md.
-#
-#   export KVLITE_SYSTEM_MODULE_PATH="<prefix>/lib/kvlite"
-#
-# Package recipes should prefer that variable (or KVLITE_HOME for a user
-# install) over patching binaries. See packaging/README.md.
 
 set -euo pipefail
 
