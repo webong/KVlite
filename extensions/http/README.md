@@ -58,6 +58,15 @@ defer remote.Close()
 _ = remote.Put(context.Background(), "user:101", map[string]any{"name": "Ada"})
 ```
 
+The Go HTTP client sends scalar replacement, `SAdd`, `SRemove`, and `HDelete`
+as whole owner-side operations. Concurrent calls to the set and hash mutations
+receive correct added/removed counts; reads do not see a gap during scalar
+replacement. List pushes also use an owner-side operation. Other multi-step
+remote operations, including commands issued by an attached Redis process,
+are not yet atomic across clients; do not treat this as a transactional API.
+Newer clients require an owner with these routes; an older owner reports a
+module-incompatibility error for unsupported mutations.
+
 `Options.DriverPaths` exposes additional server-owned driver/path mappings.
 Clients can select one only by name through `ClientOptions.Driver`; a request
 for an unavailable or unexposed driver returns a structured error. The server

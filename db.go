@@ -15,8 +15,9 @@ type DB struct {
 	backend Backend
 	// remote is true for handles backed by a transport rather than a local
 	// storage driver (for example kvlitehttp.Connect). Remote handles share
-	// the typed API and protocol stores, but multi-step commands cross one
-	// request per record operation and are not atomic.
+	// the typed API and protocol stores. A transport can execute selected
+	// logical operations owner-side; other multi-step operations may cross
+	// several requests and are not atomic.
 	remote bool
 
 	mu sync.RWMutex
@@ -80,9 +81,8 @@ func OpenWithEngine(storage Engine, backend Backend, options ...Option) (*DB, er
 }
 
 // IsRemote reports whether this handle reaches storage through a transport
-// rather than owning a local driver directory. Remote handles support the
-// same protocol stores, but multi-step commands are not atomic: each record
-// operation crosses the transport separately.
+// rather than owning a local driver directory. Transports can provide
+// owner-side logical operations, but other multi-step commands are not atomic.
 func (db *DB) IsRemote() bool {
 	return db.remote
 }
@@ -123,12 +123,11 @@ func (db *DB) Put(ctx context.Context, key string, value any, options ...PutOpti
 	}
 	db.protocolMu.Lock()
 	defer db.protocolMu.Unlock()
-	// A logical key has one representation. Remove any collection records
-	// before writing a scalar value through the generic embedded API.
-	if _, err := db.deleteLogicalKey(ctx, key); err != nil {
-		return fmt.Errorf("kvlite: put: %w", err)
+	encoded, err := db.encodeValue(value, options...)
+	if err != nil {
+		return err
 	}
-	return db.put(ctx, valueKey(key), value, options...)
+	return db.replaceLogicalValue(ctx, key, encoded)
 }
 
 // PutBytes stores an already-serialized payload without JSON re-encoding it.
@@ -161,9 +160,6 @@ func (db *DB) PutStoredValue(ctx context.Context, key, codec string, value []byt
 	}
 	db.protocolMu.Lock()
 	defer db.protocolMu.Unlock()
-	if _, err := db.deleteLogicalKey(ctx, key); err != nil {
-		return fmt.Errorf("kvlite: put: %w", err)
-	}
 	cfg := putConfig{}
 	for _, option := range options {
 		if option != nil {
@@ -172,7 +168,11 @@ func (db *DB) PutStoredValue(ctx context.Context, key, codec string, value []byt
 			}
 		}
 	}
-	return db.putPayload(ctx, valueKey(key), codec, value, cfg.ttl)
+	encoded, err := db.encodePayload(codec, value, cfg.ttl)
+	if err != nil {
+		return err
+	}
+	return db.replaceLogicalValue(ctx, key, encoded)
 }
 
 func (db *DB) put(ctx context.Context, key []byte, value any, options ...PutOption) error {
@@ -182,23 +182,7 @@ func (db *DB) put(ctx context.Context, key []byte, value any, options ...PutOpti
 	if len(key) == 0 {
 		return fmt.Errorf("%w: key is required", ErrInvalidArgument)
 	}
-	cfg := putConfig{}
-	for _, option := range options {
-		if option != nil {
-			if err := option(&cfg); err != nil {
-				return err
-			}
-		}
-	}
-	payload, err := db.cfg.codec.Marshal(value)
-	if err != nil {
-		return err
-	}
-	var expiresAt int64
-	if cfg.ttl > 0 {
-		expiresAt = db.cfg.now().Add(cfg.ttl).UnixNano()
-	}
-	encoded, err := marshalEnvelope(db.cfg.codec.Name(), payload, expiresAt)
+	encoded, err := db.encodeValue(value, options...)
 	if err != nil {
 		return err
 	}
@@ -208,16 +192,48 @@ func (db *DB) put(ctx context.Context, key []byte, value any, options ...PutOpti
 	return nil
 }
 
-func (db *DB) putPayload(ctx context.Context, key []byte, codec string, payload []byte, ttl time.Duration) error {
+func (db *DB) encodeValue(value any, options ...PutOption) ([]byte, error) {
+	cfg := putConfig{}
+	for _, option := range options {
+		if option != nil {
+			if err := option(&cfg); err != nil {
+				return nil, err
+			}
+		}
+	}
+	payload, err := db.cfg.codec.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var expiresAt int64
+	if cfg.ttl > 0 {
+		expiresAt = db.cfg.now().Add(cfg.ttl).UnixNano()
+	}
+	return marshalEnvelope(db.cfg.codec.Name(), payload, expiresAt)
+}
+
+func (db *DB) encodePayload(codec string, payload []byte, ttl time.Duration) ([]byte, error) {
 	var expiresAt int64
 	if ttl > 0 {
 		expiresAt = db.cfg.now().Add(ttl).UnixNano()
 	}
-	encoded, err := marshalEnvelope(codec, payload, expiresAt)
-	if err != nil {
-		return err
+	return marshalEnvelope(codec, payload, expiresAt)
+}
+
+func (db *DB) replaceLogicalValue(ctx context.Context, key string, encoded []byte) error {
+	if remote, ok := db.engine.(interface {
+		ReplaceLogicalValue(context.Context, string, []byte) error
+	}); ok {
+		if err := remote.ReplaceLogicalValue(ctx, key, encoded); !errors.Is(err, errAtomicReplaceUnsupported) {
+			return err
+		}
 	}
-	if err := db.engine.Put(ctx, key, encoded); err != nil {
+	// A logical key has one representation. Remove any collection records
+	// before writing its scalar replacement.
+	if _, err := db.deleteLogicalKey(ctx, key); err != nil {
+		return fmt.Errorf("kvlite: put: %w", err)
+	}
+	if err := db.engine.Put(ctx, valueKey(key), encoded); err != nil {
 		return fmt.Errorf("kvlite: put: %w", err)
 	}
 	return nil
@@ -250,6 +266,8 @@ func (db *DB) GetStoredValue(ctx context.Context, key string) (StoredValue, erro
 	if err := db.ensureOpen(); err != nil {
 		return StoredValue{}, err
 	}
+	db.protocolMu.Lock()
+	defer db.protocolMu.Unlock()
 	storageKey := valueKey(key)
 	data, found, err := db.engine.Get(ctx, storageKey)
 	if err != nil {
@@ -277,6 +295,8 @@ func (db *DB) get(ctx context.Context, key []byte, target any) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
+	db.protocolMu.Lock()
+	defer db.protocolMu.Unlock()
 	data, found, err := db.engine.Get(ctx, key)
 	if err != nil {
 		return fmt.Errorf("kvlite: get: %w", err)
@@ -321,6 +341,8 @@ func (db *DB) Has(ctx context.Context, key string) (bool, error) {
 	if err := db.ensureOpen(); err != nil {
 		return false, err
 	}
+	db.protocolMu.Lock()
+	defer db.protocolMu.Unlock()
 	storageKey := valueKey(key)
 	data, found, err := db.engine.Get(ctx, storageKey)
 	if err != nil || !found {

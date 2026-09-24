@@ -117,6 +117,11 @@ processes; per-command failures (owner down, token rejected) surface as Redis
 not atomic — each record operation crosses the transport separately — so use a
 direct owner when commands must observe one coherent snapshot.
 
+The Go HTTP client has owner-side routes for scalar replacement, list pushes,
+set add/remove, and hash-field deletion. Other composed client operations and
+attached Redis commands still need owner-side execution before they can claim
+cross-client atomicity.
+
 When started separately, attached Redis stays up during an owner outage and
 resumes requests if the owner restarts at the same URL. When the CLI starts
 both processes, it stops Redis and exits with an error if its HTTP owner dies.

@@ -325,7 +325,10 @@ func Serve(db *kvlite.DB, options Options) (*Server, error) {
 		}
 		switch request.Method {
 		case http.MethodGet:
+			store := database.Protocol()
+			store.Lock()
 			value, found, err := database.Transport().Get(request.Context(), key)
+			store.Unlock()
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -358,6 +361,39 @@ func Serve(db *kvlite.DB, options Options) (*Server, error) {
 			w.Header().Set("Allow", "GET, PUT, DELETE")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	})
+	mux.HandleFunc("PUT /v1/logical/{key}", func(w http.ResponseWriter, request *http.Request) {
+		database, ok := resolveSharedDatabase(databases, w, request)
+		if !ok {
+			return
+		}
+		key, err := base64.RawURLEncoding.DecodeString(request.PathValue("key"))
+		if err != nil || len(key) == 0 {
+			http.Error(w, "invalid key", http.StatusBadRequest)
+			return
+		}
+		request.Body = http.MaxBytesReader(w, request.Body, options.MaxRequestBytes)
+		encoded, err := io.ReadAll(request.Body)
+		if err != nil {
+			http.Error(w, "invalid or oversized value", http.StatusRequestEntityTooLarge)
+			return
+		}
+		store := database.Protocol()
+		if _, err := store.DecodeRecord(encoded); err != nil {
+			http.Error(w, "invalid value envelope", http.StatusBadRequest)
+			return
+		}
+		store.Lock()
+		defer store.Unlock()
+		if _, err := store.DeleteLogicalKey(request.Context(), string(key)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := store.Put(request.Context(), store.ValueKey(string(key)), encoded); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /v1/scan", func(w http.ResponseWriter, request *http.Request) {
 		database, ok := resolveSharedDatabase(databases, w, request)
@@ -415,10 +451,101 @@ func Serve(db *kvlite.DB, options Options) (*Server, error) {
 			Length int `json:"length"`
 		}{Length: length})
 	})
+	mux.HandleFunc("POST /v1/set/add", func(w http.ResponseWriter, request *http.Request) {
+		database, ok := resolveSharedDatabase(databases, w, request)
+		if !ok {
+			return
+		}
+		name, err := base64.RawURLEncoding.DecodeString(request.URL.Query().Get("name"))
+		if err != nil {
+			http.Error(w, "invalid set name", http.StatusBadRequest)
+			return
+		}
+		members, err := readStringItems(w, request, options.MaxRequestBytes)
+		if err != nil {
+			http.Error(w, "invalid or oversized members", http.StatusBadRequest)
+			return
+		}
+		added, err := database.SAdd(request.Context(), string(name), members...)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Added int `json:"added"`
+		}{Added: added})
+	})
+	mux.HandleFunc("POST /v1/set/remove", func(w http.ResponseWriter, request *http.Request) {
+		database, ok := resolveSharedDatabase(databases, w, request)
+		if !ok {
+			return
+		}
+		name, err := base64.RawURLEncoding.DecodeString(request.URL.Query().Get("name"))
+		if err != nil {
+			http.Error(w, "invalid set name", http.StatusBadRequest)
+			return
+		}
+		members, err := readStringItems(w, request, options.MaxRequestBytes)
+		if err != nil {
+			http.Error(w, "invalid or oversized members", http.StatusBadRequest)
+			return
+		}
+		removed, err := database.SRemove(request.Context(), string(name), members...)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Removed int `json:"removed"`
+		}{Removed: removed})
+	})
+	mux.HandleFunc("POST /v1/hash/delete", func(w http.ResponseWriter, request *http.Request) {
+		database, ok := resolveSharedDatabase(databases, w, request)
+		if !ok {
+			return
+		}
+		name, err := base64.RawURLEncoding.DecodeString(request.URL.Query().Get("name"))
+		if err != nil {
+			http.Error(w, "invalid hash name", http.StatusBadRequest)
+			return
+		}
+		fields, err := readStringItems(w, request, options.MaxRequestBytes)
+		if err != nil {
+			http.Error(w, "invalid or oversized fields", http.StatusBadRequest)
+			return
+		}
+		deleted, err := database.HDelete(request.Context(), string(name), fields...)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Deleted int `json:"deleted"`
+		}{Deleted: deleted})
+	})
 	go func() {
 		_ = server.Serve(listener)
 	}()
 	return result, nil
+}
+
+func readStringItems(w http.ResponseWriter, request *http.Request, maxRequestBytes int64) ([]string, error) {
+	request.Body = http.MaxBytesReader(w, request.Body, maxRequestBytes)
+	data, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, err
+	}
+	var items []string
+	if err := json.Unmarshal(data, &items); err != nil {
+		return nil, err
+	}
+	if items == nil {
+		return nil, fmt.Errorf("expected a JSON array of strings")
+	}
+	return items, nil
 }
 
 // handleJSONEntry is the language-neutral API. It deliberately accepts and
@@ -728,7 +855,7 @@ func (engine *remoteEngine) PushList(ctx context.Context, key []byte, items [][]
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return 0, remoteStatusError(response)
+		return 0, remoteMutationError(response, "list push")
 	}
 	var result struct {
 		Length int `json:"length"`
@@ -737,6 +864,95 @@ func (engine *remoteEngine) PushList(ctx context.Context, key []byte, items [][]
 		return 0, err
 	}
 	return result.Length, nil
+}
+
+func (engine *remoteEngine) AddSet(ctx context.Context, name string, members []string) (int, error) {
+	payload, err := json.Marshal(members)
+	if err != nil {
+		return 0, err
+	}
+	endpoint := "/v1/set/add?name=" + base64.RawURLEncoding.EncodeToString([]byte(name))
+	response, err := engine.request(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return 0, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return 0, remoteMutationError(response, "set add")
+	}
+	var result struct {
+		Added int `json:"added"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return 0, err
+	}
+	return result.Added, nil
+}
+
+func (engine *remoteEngine) RemoveSet(ctx context.Context, name string, members []string) (int, error) {
+	payload, err := json.Marshal(members)
+	if err != nil {
+		return 0, err
+	}
+	endpoint := "/v1/set/remove?name=" + base64.RawURLEncoding.EncodeToString([]byte(name))
+	response, err := engine.request(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return 0, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return 0, remoteMutationError(response, "set remove")
+	}
+	var result struct {
+		Removed int `json:"removed"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return 0, err
+	}
+	return result.Removed, nil
+}
+
+func (engine *remoteEngine) DeleteHashFields(ctx context.Context, name string, fields []string) (int, error) {
+	payload, err := json.Marshal(fields)
+	if err != nil {
+		return 0, err
+	}
+	endpoint := "/v1/hash/delete?name=" + base64.RawURLEncoding.EncodeToString([]byte(name))
+	response, err := engine.request(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return 0, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return 0, remoteMutationError(response, "hash delete")
+	}
+	var result struct {
+		Deleted int `json:"deleted"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return 0, err
+	}
+	return result.Deleted, nil
+}
+
+func (engine *remoteEngine) ReplaceLogicalValue(ctx context.Context, key string, encoded []byte) error {
+	endpoint := "/v1/logical/" + base64.RawURLEncoding.EncodeToString([]byte(key))
+	response, err := engine.request(ctx, http.MethodPut, endpoint, bytes.NewReader(encoded))
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		return remoteMutationError(response, "logical replacement")
+	}
+	return nil
+}
+
+func remoteMutationError(response *http.Response, operation string) error {
+	if response.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("%w: HTTP owner does not support atomic %s; upgrade its HTTP extension", kvlite.ErrModuleIncompatible, operation)
+	}
+	return remoteStatusError(response)
 }
 
 func encodeList(items [][]byte) []byte {

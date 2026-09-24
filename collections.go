@@ -27,6 +27,16 @@ func (db *DB) HDelete(ctx context.Context, name string, fields ...string) (int, 
 	if err := db.ensureOpen(); err != nil {
 		return 0, err
 	}
+	if remote, ok := db.engine.(interface {
+		DeleteHashFields(context.Context, string, []string) (int, error)
+	}); ok {
+		deleted, err := remote.DeleteHashFields(ctx, name, fields)
+		if !errors.Is(err, errAtomicHashDeleteUnsupported) {
+			return deleted, err
+		}
+	}
+	db.protocolMu.Lock()
+	defer db.protocolMu.Unlock()
 	deleted := 0
 	for _, field := range fields {
 		key := namespacedKey(kindHash, name, field)
@@ -86,6 +96,16 @@ func (db *DB) SAdd(ctx context.Context, name string, members ...string) (int, er
 	if err := db.ensureOpen(); err != nil {
 		return 0, err
 	}
+	if remote, ok := db.engine.(interface {
+		AddSet(context.Context, string, []string) (int, error)
+	}); ok {
+		added, err := remote.AddSet(ctx, name, members)
+		if !errors.Is(err, errAtomicSetAddUnsupported) {
+			return added, err
+		}
+	}
+	db.protocolMu.Lock()
+	defer db.protocolMu.Unlock()
 	added := 0
 	for _, member := range members {
 		key := namespacedKey(kindSet, name, member)
@@ -109,6 +129,16 @@ func (db *DB) SRemove(ctx context.Context, name string, members ...string) (int,
 	if err := db.ensureOpen(); err != nil {
 		return 0, err
 	}
+	if remote, ok := db.engine.(interface {
+		RemoveSet(context.Context, string, []string) (int, error)
+	}); ok {
+		removed, err := remote.RemoveSet(ctx, name, members)
+		if !errors.Is(err, errAtomicSetRemoveUnsupported) {
+			return removed, err
+		}
+	}
+	db.protocolMu.Lock()
+	defer db.protocolMu.Unlock()
 	removed := 0
 	for _, member := range members {
 		key := namespacedKey(kindSet, name, member)

@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"sort"
 	"sync"
 	"testing"
@@ -219,6 +221,283 @@ func TestServeAndConnectAreExplicitExtensions(t *testing.T) {
 	}
 	if primaryMetadata.Redis != redisURL {
 		t.Fatalf("primary Redis URL = %q, want %q", primaryMetadata.Redis, redisURL)
+	}
+}
+
+func TestConcurrentRemoteSAddReportsOneNewMember(t *testing.T) {
+	_, server := openTestOwner(t, Options{ListenAddress: "127.0.0.1:0"})
+	const clients = 32
+	remotes := make([]*kvlite.DB, clients)
+	for index := range remotes {
+		remote, err := Connect(server.URL(), ClientOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		remotes[index] = remote
+		t.Cleanup(func() { _ = remote.Close() })
+	}
+	for round := 0; round < 4; round++ {
+		name := fmt.Sprintf("shared-set-%d", round)
+		start := make(chan struct{})
+		results := make(chan int, clients)
+		errors := make(chan error, clients)
+		var workers sync.WaitGroup
+		for _, remote := range remotes {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				<-start
+				added, err := remote.SAdd(context.Background(), name, "member")
+				results <- added
+				errors <- err
+			}()
+		}
+		close(start)
+		workers.Wait()
+		close(results)
+		close(errors)
+		for err := range errors {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		added := 0
+		for result := range results {
+			added += result
+		}
+		if added != 1 {
+			t.Fatalf("%d clients reported %d additions for one member, want 1", clients, added)
+		}
+	}
+}
+
+func TestConcurrentRemoteSRemoveReportsOneRemovedMember(t *testing.T) {
+	_, server := openTestOwner(t, Options{ListenAddress: "127.0.0.1:0"})
+	const clients = 24
+	remotes := make([]*kvlite.DB, clients)
+	for index := range remotes {
+		remote, err := Connect(server.URL(), ClientOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		remotes[index] = remote
+		t.Cleanup(func() { _ = remote.Close() })
+	}
+	for round := 0; round < 4; round++ {
+		name := fmt.Sprintf("remove-set-%d", round)
+		if _, err := remotes[0].SAdd(context.Background(), name, "member"); err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		results := make(chan int, clients)
+		errors := make(chan error, clients)
+		var workers sync.WaitGroup
+		for _, remote := range remotes {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				<-start
+				removed, err := remote.SRemove(context.Background(), name, "member")
+				results <- removed
+				errors <- err
+			}()
+		}
+		close(start)
+		workers.Wait()
+		close(results)
+		close(errors)
+		for err := range errors {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		removed := 0
+		for result := range results {
+			removed += result
+		}
+		if removed != 1 {
+			t.Fatalf("%d clients reported %d removals for one member, want 1", clients, removed)
+		}
+	}
+}
+
+func TestConcurrentRemoteHDeleteReportsOneRemovedField(t *testing.T) {
+	_, server := openTestOwner(t, Options{ListenAddress: "127.0.0.1:0"})
+	const clients = 24
+	remotes := make([]*kvlite.DB, clients)
+	for index := range remotes {
+		remote, err := Connect(server.URL(), ClientOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		remotes[index] = remote
+		t.Cleanup(func() { _ = remote.Close() })
+	}
+	for round := 0; round < 4; round++ {
+		name := fmt.Sprintf("remove-hash-%d", round)
+		if err := remotes[0].HSet(context.Background(), name, "field", "value"); err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		results := make(chan int, clients)
+		errors := make(chan error, clients)
+		var workers sync.WaitGroup
+		for _, remote := range remotes {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				<-start
+				removed, err := remote.HDelete(context.Background(), name, "field")
+				results <- removed
+				errors <- err
+			}()
+		}
+		close(start)
+		workers.Wait()
+		close(results)
+		close(errors)
+		for err := range errors {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		removed := 0
+		for result := range results {
+			removed += result
+		}
+		if removed != 1 {
+			t.Fatalf("%d clients reported %d removals for one field, want 1", clients, removed)
+		}
+	}
+}
+
+func TestRemoteCollectionMutationsAcceptEmptyName(t *testing.T) {
+	_, server := openTestOwner(t, Options{ListenAddress: "127.0.0.1:0"})
+	remote, err := Connect(server.URL(), ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = remote.Close() })
+	ctx := context.Background()
+	if added, err := remote.SAdd(ctx, "", "member"); err != nil || added != 1 {
+		t.Fatalf("SAdd(empty name) = %d, %v, want 1", added, err)
+	}
+	if removed, err := remote.SRemove(ctx, "", "member"); err != nil || removed != 1 {
+		t.Fatalf("SRemove(empty name) = %d, %v, want 1", removed, err)
+	}
+	if deleted, err := remote.HDelete(ctx, "", "field"); err != nil || deleted != 0 {
+		t.Fatalf("HDelete(empty name) = %d, %v, want 0", deleted, err)
+	}
+}
+
+func TestSetMutationRejectsTrailingRequestData(t *testing.T) {
+	_, server := openTestOwner(t, Options{ListenAddress: "127.0.0.1:0"})
+	request, err := http.NewRequest(http.MethodPost, server.URL()+"/v1/set/add?name=c2V0", bytes.NewBufferString(`["member"]{"extra":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("POST set mutation with trailing data = %s, want 400 Bad Request", response.Status)
+	}
+}
+
+func TestRemoteReplacementNeverExposesMissingValue(t *testing.T) {
+	_, server := openTestOwner(t, Options{ListenAddress: "127.0.0.1:0"})
+	writer, err := Connect(server.URL(), ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = writer.Close() })
+	reader, err := Connect(server.URL(), ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	ctx := context.Background()
+	if err := writer.Put(ctx, "current", "before"); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() {
+		for index := 0; index < 100; index++ {
+			if err := writer.Put(ctx, "current", "after"); err != nil {
+				finished <- err
+				return
+			}
+		}
+		finished <- nil
+	}()
+	for {
+		var value string
+		if err := reader.Get(ctx, "current", &value); err != nil {
+			t.Fatalf("reader observed an absent value during replacement: %v", err)
+		}
+		if value != "before" && value != "after" {
+			t.Fatalf("reader observed unexpected value %q", value)
+		}
+		select {
+		case err := <-finished:
+			if err != nil {
+				t.Fatal(err)
+			}
+			return
+		default:
+		}
+	}
+}
+
+func TestOwnerReadNeverSeesRemoteReplacementGap(t *testing.T) {
+	owner, server := openTestOwner(t, Options{ListenAddress: "127.0.0.1:0"})
+	remote, err := Connect(server.URL(), ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = remote.Close() })
+	ctx := context.Background()
+	if err := remote.Put(ctx, "current", "before"); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() {
+		for index := 0; index < 500; index++ {
+			if err := remote.Put(ctx, "current", "after"); err != nil {
+				finished <- err
+				return
+			}
+		}
+		finished <- nil
+	}()
+	for {
+		var value string
+		if err := owner.Get(ctx, "current", &value); err != nil {
+			t.Fatalf("owner reader observed an absent value during replacement: %v", err)
+		}
+		select {
+		case err := <-finished:
+			if err != nil {
+				t.Fatal(err)
+			}
+			return
+		default:
+		}
+	}
+}
+
+func TestRemoteMutationExplainsOlderOwner(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+	remote, err := Connect(server.URL, ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = remote.Close() })
+	if err := remote.Put(context.Background(), "key", "value"); !errors.Is(err, kvlite.ErrModuleIncompatible) {
+		t.Fatalf("Put() against an owner without logical replacement = %v, want ErrModuleIncompatible", err)
 	}
 }
 
