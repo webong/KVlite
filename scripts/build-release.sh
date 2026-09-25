@@ -17,8 +17,8 @@ Build KVLite artifacts for the current native platform.
 Options:
   --version VERSION       Release version used in dist/VERSION (default: dev)
   --target OS-ARCH        Native target, such as darwin-arm64 (default: host)
-  --driver NAME           Driver bundle: rocksdb, leveldb, berkeleydb, or
-                          "none" for a driverless host CLI (core plus the
+  --driver NAME           Driver bundle: rocksdb, leveldb, badgerdb, boltdb,
+                          lmdb, berkeleydb, or "none" for a driverless host CLI (core plus the
                           ephemeral memory engine only; default: rocksdb)
   --extension NAME        Protocol module bundle: http or redis (mutually exclusive with --driver)
   --allow-berkeleydb      Enable Berkeley DB release bundle build. This requires an explicit
@@ -151,6 +151,21 @@ case "$driver" in
     native_driver=0
     is_host_bundle=0
     ;;
+  badgerdb)
+    build_tags="kvlite_badgerdb"
+    native_driver=0
+    is_host_bundle=0
+    ;;
+  boltdb)
+    build_tags="kvlite_boltdb"
+    native_driver=0
+    is_host_bundle=0
+    ;;
+  lmdb)
+    build_tags="kvlite_lmdb"
+    native_driver=1
+    is_host_bundle=0
+    ;;
   berkeleydb)
     if [[ "$allow_berkeleydb" != "1" ]]; then
       fail "Berkeley DB bundles are deliberately excluded from the standard release workflow; add --allow-berkeleydb and keep license obligations explicit"
@@ -169,7 +184,7 @@ case "$driver" in
     native_driver=0
     is_host_bundle=1
     ;;
-  *) fail "unsupported driver: $driver (expected rocksdb, leveldb, berkeleydb, or none)" ;;
+  *) fail "unsupported driver: $driver (expected rocksdb, leveldb, badgerdb, boltdb, lmdb, berkeleydb, or none)" ;;
 esac
 
 # Release driver CLIs are extension-free hosts: they launch verified standalone
@@ -329,6 +344,32 @@ if [[ "$is_extension_bundle" == "0" ]] && has_component c-shared; then
   files+=("lib/$library_name" "include/kvlite.h")
 fi
 
+# Ship the direct engine dependency's license with each new driver bundle.
+# LMDB's vendored C source specifically requires a verbatim OpenLDAP license.
+if [[ "$is_extension_bundle" == "0" ]]; then
+  case "$driver" in
+    badgerdb)
+      dependency_dir="$(go list -m -f '{{.Dir}}' github.com/dgraph-io/badger/v4)"
+      mkdir -p "$staging_dir/NOTICES"
+      cp "$dependency_dir/LICENSE" "$staging_dir/NOTICES/BadgerDB-LICENSE"
+      files+=("NOTICES/BadgerDB-LICENSE")
+      ;;
+    boltdb)
+      dependency_dir="$(go list -m -f '{{.Dir}}' go.etcd.io/bbolt)"
+      mkdir -p "$staging_dir/NOTICES"
+      cp "$dependency_dir/LICENSE" "$staging_dir/NOTICES/bbolt-LICENSE"
+      files+=("NOTICES/bbolt-LICENSE")
+      ;;
+    lmdb)
+      dependency_dir="$(go list -m -f '{{.Dir}}' github.com/PowerDNS/lmdb-go)"
+      mkdir -p "$staging_dir/NOTICES"
+      cp "$dependency_dir/LICENSE.md" "$staging_dir/NOTICES/lmdb-go-LICENSE.md"
+      cp "$dependency_dir/LICENSE.mdb.md" "$staging_dir/NOTICES/LMDB-OpenLDAP-LICENSE.md"
+      files+=("NOTICES/lmdb-go-LICENSE.md" "NOTICES/LMDB-OpenLDAP-LICENSE.md")
+      ;;
+  esac
+fi
+
 if [[ "$bundle_runtime" == "1" ]]; then
   if ((${#notice_files[@]} == 0)); then
     fail "--bundle-runtime requires at least one --notice-file with third-party license notices"
@@ -391,10 +432,15 @@ write_module_manifest() {
     if [[ "$driver" == "rocksdb" ]]; then
       printf '  "capabilities": ["embedded-storage", "ttl-compaction"],\n'
       printf '  "license": "Apache-2.0",\n'
+    elif [[ "$driver" == "lmdb" ]]; then
+      printf '  "capabilities": ["embedded-storage", "native-cgo"],\n'
+      printf '  "license": "BSD-3-Clause AND OLDAP-2.8",\n'
     else
       printf '  "capabilities": ["embedded-storage"],\n'
       if [[ "$driver" == "berkeleydb" ]]; then
         printf '  "license": "LicenseRef-Oracle-BerkeleyDB-separate-distribution",\n'
+      elif [[ "$driver" == "boltdb" ]]; then
+        printf '  "license": "MIT",\n'
       else
         printf '  "license": "Apache-2.0",\n'
       fi

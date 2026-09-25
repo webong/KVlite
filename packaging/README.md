@@ -16,8 +16,8 @@ curl -fsSL https://github.com/webong/KVlite/releases/latest/download/kvlite-inst
 ```
 
 That installs the pluggable-first base: host CLI plus protocol modules,
-memory only, no persistent engine. Add one with `--driver leveldb` (or
-`rocksdb`). Useful flags: `--version`, `--prefix`, `--no-http`,
+memory only, no persistent engine. Add one with `--driver leveldb`,
+`badgerdb`, `boltdb`, `lmdb`, or `rocksdb`. Useful flags: `--version`, `--prefix`, `--no-http`,
 `--no-redis`, `--shell-rc`, `--yes`. The installer detects the platform,
 verifies the tarball checksum before unpacking, installs through the same
 `scripts/install.sh` path below, verifies every module, and prints the one
@@ -33,6 +33,9 @@ One installable package per bundle kind, so users install only what they run:
 | --- | --- | --- |
 | `kvlite` | driverless host `bin/kvlite` (core + memory) | nothing |
 | `kvlite-leveldb` | driver bundle, `include/kvlite.h` (no CLI link) | `kvlite` (host drives it) |
+| `kvlite-badgerdb` | pure-Go BadgerDB driver bundle | `kvlite` |
+| `kvlite-boltdb` | pure-Go bbolt driver bundle | `kvlite` |
+| `kvlite-lmdb` | LMDB CGo driver bundle with statically linked LMDB 0.9 source | `kvlite` |
 | `kvlite-rocksdb` | same shape for RocksDB | `kvlite` + distro RocksDB/compression libs, or the `--bundle-runtime` output |
 | `kvlite-http` | `bin/kvlite-http` + bundle | `kvlite` + any one driver package (or memory) |
 | `kvlite-redis` | `bin/kvlite-redis` + bundle | `kvlite` + any one driver package (or memory) |
@@ -109,6 +112,9 @@ there is nothing else to ship. Each driver says exactly what it needs:
 | --- | --- | --- |
 | `memory` | core itself | nothing |
 | `leveldb` | the bundle (pure Go) | nothing, ever |
+| `badgerdb` | the bundle (pure Go) | nothing beyond the bundle |
+| `boltdb` | the bundle (pure Go, using bbolt) | nothing beyond the bundle |
+| `lmdb` | the bundle (CGo, statically linked LMDB C source) | nothing beyond the bundle; include both bundled license notices |
 | `rocksdb` | system **or** bundle, your choice | distro `rocksdb` **or** a `--bundle-runtime` package |
 | `berkeleydb` | system only, always | a Berkeley DB you are entitled to use |
 

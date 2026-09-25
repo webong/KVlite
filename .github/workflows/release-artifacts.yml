@@ -130,6 +130,9 @@ jobs:
           make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=none
           make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=rocksdb
           make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=leveldb
+          make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=badgerdb
+          make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=boltdb
+          make release RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}" DRIVER=lmdb
           make release-http RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}"
           make release-redis RELEASE_VERSION="$version" RELEASE_TARGET="${{ matrix.target }}"
 

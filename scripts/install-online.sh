@@ -12,7 +12,8 @@
 # Options:
 #   --version VERSION   Release to install (default: latest)
 #   --driver NAME       Persistent engine to install alongside the host:
-#                       leveldb or rocksdb (default: none, host only with
+#                       leveldb, badgerdb, boltdb, lmdb, or rocksdb
+#                       (default: none, host only with
 #                       the ephemeral memory engine)
 #   --prefix DIR        Install prefix (default: /usr/local when writable,
 #                       otherwise $HOME/.local)
@@ -106,8 +107,8 @@ while (($# > 0)); do
 done
 
 case "$driver" in
-  ""|leveldb|rocksdb) ;;
-  *) fail "unsupported driver: $driver (expected leveldb or rocksdb, or empty for host only)" ;;
+  ""|leveldb|badgerdb|boltdb|lmdb|rocksdb) ;;
+  *) fail "unsupported driver: $driver (expected leveldb, badgerdb, boltdb, lmdb, rocksdb, or empty for host only)" ;;
 esac
 
 os_name="$(uname -s)"

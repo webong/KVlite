@@ -1,20 +1,26 @@
-go 1.23
+go 1.23.0
 
 use (
 	.
 	./capi
 	./cmd/kvlite
 	./examples/basic
+	./extensions/badgerdb
 	./extensions/berkeleydb
+	./extensions/boltdb
 	./extensions/http
 	./extensions/leveldb
+	./extensions/lmdb
 	./extensions/redis
 	./extensions/rocksdb
 )
 
 replace github.com/webong/kvlite v0.1.0 => .
+replace github.com/webong/kvlite/extensions/badgerdb v0.1.0 => ./extensions/badgerdb
 replace github.com/webong/kvlite/extensions/berkeleydb v0.1.0 => ./extensions/berkeleydb
+replace github.com/webong/kvlite/extensions/boltdb v0.1.0 => ./extensions/boltdb
 replace github.com/webong/kvlite/extensions/http v0.1.0 => ./extensions/http
 replace github.com/webong/kvlite/extensions/leveldb v0.1.0 => ./extensions/leveldb
+replace github.com/webong/kvlite/extensions/lmdb v0.1.0 => ./extensions/lmdb
 replace github.com/webong/kvlite/extensions/redis v0.1.0 => ./extensions/redis
 replace github.com/webong/kvlite/extensions/rocksdb v0.1.0 => ./extensions/rocksdb

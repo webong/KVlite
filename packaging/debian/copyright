@@ -7,8 +7,9 @@ License: Apache-2.0
  KVLite itself is Apache-2.0; see LICENSE in the source tree.
  .
  Per-bundle third-party notices install under
- /usr/share/doc/kvlite/<bundle>/ when the bundle was built with
- --bundle-runtime. On Debian systems the full license texts of linked
+ /usr/share/doc/kvlite/<bundle>/ when included in a bundle (notably
+ LMDB's bundled OpenLDAP-licensed C source, and builds using
+ --bundle-runtime). On Debian systems the full license texts of linked
  system libraries are also available under /usr/share/doc/<package>/.
 
 Files: packaging/debian/*

@@ -23,6 +23,12 @@ const (
 	DriverRocksDB DriverName = "rocksdb"
 	// DriverLevelDB is the stable name provided by extensions/leveldb.
 	DriverLevelDB DriverName = "leveldb"
+	// DriverBadgerDB is provided by extensions/badgerdb.
+	DriverBadgerDB DriverName = "badgerdb"
+	// DriverBoltDB is provided by extensions/boltdb using the maintained bbolt fork.
+	DriverBoltDB DriverName = "boltdb"
+	// DriverLMDB is provided by extensions/lmdb.
+	DriverLMDB DriverName = "lmdb"
 	// DriverBerkeleyDB is reserved for a separately distributed Berkeley DB
 	// driver. The core intentionally does not register or link it.
 	DriverBerkeleyDB DriverName = "berkeleydb"

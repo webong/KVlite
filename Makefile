@@ -8,7 +8,7 @@ ROCKSDB_VERSION ?= v10.8.3
 BERKELEYDB_CFLAGS ?= $(CGO_CFLAGS)
 BERKELEYDB_LDFLAGS ?= $(CGO_LDFLAGS)
 DRIVER ?= rocksdb
-DRIVER_TAGS ?= $(if $(filter rocksdb,$(DRIVER)),rocksdb kvlite_rocksdb,$(if $(filter leveldb,$(DRIVER)),kvlite_leveldb,$(if $(filter berkeleydb,$(DRIVER)),berkeleydb kvlite_berkeleydb,)))
+DRIVER_TAGS ?= $(if $(filter rocksdb,$(DRIVER)),rocksdb kvlite_rocksdb,$(if $(filter leveldb,$(DRIVER)),kvlite_leveldb,$(if $(filter berkeleydb,$(DRIVER)),berkeleydb kvlite_berkeleydb,$(if $(filter badgerdb,$(DRIVER)),kvlite_badgerdb,$(if $(filter boltdb,$(DRIVER)),kvlite_boltdb,$(if $(filter lmdb,$(DRIVER)),kvlite_lmdb,))))))
 
 ifeq ($(DRIVER),berkeleydb)
 DRIVER_CGO_ENV = CGO_CFLAGS="$(BERKELEYDB_CFLAGS)" CGO_LDFLAGS="$(BERKELEYDB_LDFLAGS)"
@@ -17,10 +17,10 @@ DRIVER_CGO_ENV =
 endif
 
 test:
-	go test . ./capi ./cmd/kvlite ./extensions/berkeleydb/... ./extensions/leveldb/... ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/...
+	go test . ./capi ./cmd/kvlite ./extensions/badgerdb/... ./extensions/berkeleydb/... ./extensions/boltdb/... ./extensions/leveldb/... ./extensions/lmdb/... ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/...
 
 test-race:
-	go test -race . ./capi ./cmd/kvlite ./extensions/berkeleydb/... ./extensions/leveldb/... ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/...
+	go test -race . ./capi ./cmd/kvlite ./extensions/badgerdb/... ./extensions/berkeleydb/... ./extensions/boltdb/... ./extensions/leveldb/... ./extensions/lmdb/... ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/...
 
 test-rocksdb:
 	go test -tags 'rocksdb,kvlite_rocksdb' . ./capi ./cmd/kvlite ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/... ./examples/basic
@@ -51,7 +51,7 @@ test-bindings-leveldb:
 	bash ./scripts/test-bindings-leveldb.sh
 
 vet:
-	go vet . ./capi ./cmd/kvlite ./extensions/berkeleydb/... ./extensions/leveldb/... ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/...
+	go vet . ./capi ./cmd/kvlite ./extensions/badgerdb/... ./extensions/berkeleydb/... ./extensions/boltdb/... ./extensions/leveldb/... ./extensions/lmdb/... ./extensions/rocksdb/... ./extensions/http/... ./extensions/redis/...
 
 build-cli:
 	mkdir -p dist

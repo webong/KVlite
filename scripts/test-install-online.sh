@@ -17,6 +17,11 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 cd "$repo_root"
 
 target="$(go env GOHOSTOS)-$(go env GOHOSTARCH)"
+driver="${KVLITE_ONLINE_TEST_DRIVER:-leveldb}"
+case "$driver" in
+  leveldb|badgerdb|boltdb|lmdb) ;;
+  *) fail "unsupported KVLITE_ONLINE_TEST_DRIVER: $driver" ;;
+esac
 case "$target" in
   darwin-*|linux-*) ;;
   *) printf 'install-online test: SKIP (unsupported target %s)\n' "$target" >&2; exit 0 ;;
@@ -38,7 +43,7 @@ free_port() {
 
 echo "install-online test: building release bundles" >&2
 bash "$repo_root/scripts/build-release.sh" --version latest --driver none >/dev/null
-bash "$repo_root/scripts/build-release.sh" --version latest --driver leveldb >/dev/null
+bash "$repo_root/scripts/build-release.sh" --version latest --driver "$driver" >/dev/null
 bash "$repo_root/scripts/build-release.sh" --version latest --extension http >/dev/null
 bash "$repo_root/scripts/build-release.sh" --version latest --extension redis >/dev/null
 
@@ -61,21 +66,21 @@ echo "install-online test: installing from asset server" >&2
 bash "$repo_root/scripts/install-online.sh" \
   --base-url "http://127.0.0.1:$port" \
   --prefix "$prefix" \
-  --driver leveldb \
+  --driver "$driver" \
   --yes >/dev/null || fail "online install failed"
 [[ -x "$prefix/bin/kvlite" && -x "$prefix/bin/kvlite-http" && -x "$prefix/bin/kvlite-redis" ]] || fail "installed binaries missing"
 
 export KVLITE_SYSTEM_MODULE_PATH="$prefix/lib/kvlite"
 export KVLITE_MODULE_PATH=""
 export KVLITE_HOME=""
-"$prefix/bin/kvlite" module verify leveldb >/dev/null || fail "verify leveldb failed"
+"$prefix/bin/kvlite" module verify "$driver" >/dev/null || fail "verify $driver failed"
 "$prefix/bin/kvlite" module verify http >/dev/null || fail "verify http failed"
 "$prefix/bin/kvlite" module verify redis >/dev/null || fail "verify redis failed"
 
 echo "install-online test: serving from the installed tree" >&2
 data="$work_root/data"
 http_port="$(free_port)"
-"$prefix/bin/kvlite" serve --extension-mode=standalone --path "$data" --driver leveldb --listen "127.0.0.1:$http_port" >"$work_root/serve.log" 2>&1 &
+"$prefix/bin/kvlite" serve --extension-mode=standalone --path "$data" --driver "$driver" --listen "127.0.0.1:$http_port" >"$work_root/serve.log" 2>&1 &
 app_pid=$!
 ready=0
 for _ in $(seq 1 100); do

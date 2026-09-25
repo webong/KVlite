@@ -745,5 +745,5 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\nDefaults prefer linked extensions, and fall back to standalone module binaries when auto-linked extensions are missing.")
 	fmt.Fprintln(os.Stderr, "Standalone HTTP and Redis share one database through a shared-owner topology: a kvlite-http owner holds the directory and kvlite-redis attaches over the owner's loopback protocol. Serving both together needs explicit --listen and --redis-listen ports.")
 	fmt.Fprintln(os.Stderr, "The binary can discover installed module descriptors from KVLITE_MODULE_PATH, KVLITE_HOME/{modules,drivers}, or KVLITE_SYSTEM_MODULE_PATH; listing them never loads code.")
-	fmt.Fprintln(os.Stderr, "Build a driver bundle with -tags kvlite_rocksdb,rocksdb; -tags kvlite_leveldb; or -tags kvlite_berkeleydb,berkeleydb, then inspect it with `kvlite driver list`.")
+	fmt.Fprintln(os.Stderr, "Build a driver bundle with -tags kvlite_rocksdb,rocksdb; -tags kvlite_leveldb; -tags kvlite_badgerdb; -tags kvlite_boltdb; -tags kvlite_lmdb; or -tags kvlite_berkeleydb,berkeleydb, then inspect it with `kvlite driver list`.")
 }

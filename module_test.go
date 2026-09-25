@@ -285,7 +285,7 @@ func TestSourceModuleManifestsAreDiscoverable(t *testing.T) {
 	for _, module := range modules {
 		got = append(got, module.Manifest.Name)
 	}
-	want := []string{"berkeleydb", "http", "leveldb", "redis", "rocksdb"}
+	want := []string{"badgerdb", "berkeleydb", "boltdb", "http", "leveldb", "lmdb", "redis", "rocksdb"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("source module names = %#v, want %#v", got, want)
 	}

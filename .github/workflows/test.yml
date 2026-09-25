@@ -40,11 +40,28 @@ jobs:
       - name: Tagged CLI tests (LevelDB-linked)
         run: go test -count=1 -tags kvlite_leveldb ./cmd/kvlite/
 
+      - name: Tagged CLI tests (new drivers)
+        run: |
+          go test -count=1 -tags kvlite_badgerdb ./cmd/kvlite/
+          go test -count=1 -tags kvlite_boltdb ./cmd/kvlite/
+          go test -count=1 -tags kvlite_lmdb ./cmd/kvlite/
+
       - name: Standalone extension integration (LevelDB)
         run: make test-standalone-modules
 
+      - name: Standalone extension integration (new drivers)
+        run: |
+          for driver in badgerdb boltdb lmdb; do
+            KVLITE_STANDALONE_DRIVER="$driver" \
+            KVLITE_STANDALONE_TEST_VERSION="standalone-test-$driver" \
+              make test-standalone-modules
+          done
+
       - name: Online installer end-to-end
         run: make test-install-online
+
+      - name: Online installer selects LMDB extension
+        run: KVLITE_ONLINE_TEST_DRIVER=lmdb make test-install-online
 
       - name: Runtime bundling check
         run: make test-bundle-runtime

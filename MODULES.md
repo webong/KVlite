@@ -68,8 +68,8 @@ kvlite module verify rocksdb
 
 The caller selects a driver when a local database is first opened. KVLite then
 stores that stable driver identity in `KVLITE-MANIFEST.json`. Reopening through
-a different driver fails; the manifest does not make RocksDB, LevelDB, and
-Berkeley DB files interchangeable.
+a different driver fails; the manifest does not make RocksDB, LevelDB,
+BadgerDB, BoltDB, LMDB, and Berkeley DB files interchangeable.
 
 For the current remote HTTP server, an authenticated client may request a
 driver name and the server resolves only an installed, server-owned mapping.

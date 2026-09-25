@@ -18,8 +18,10 @@ ultimately install prebuilt module artifacts rather than compile KVLite.
 
 ## What is included
 
-- An extension registry: import only `extensions/rocksdb`,
-  `extensions/leveldb`, or `extensions/berkeleydb`, then use `WithDriver`.
+- An extension registry: import only the storage driver you need from
+  `extensions/rocksdb`, `extensions/leveldb`, `extensions/badgerdb`,
+  `extensions/boltdb`, `extensions/lmdb`, or `extensions/berkeleydb`, then use
+  `WithDriver`.
 - Automatic JSON encoding for strings, numbers, structs, slices, and maps.
 - A pluggable `Codec` interface with the codec name stored beside every value.
 - Per-key and per-hash-field TTLs with exact read-time expiry.
@@ -66,7 +68,11 @@ never silently hands real data to throwaway storage. (The CLI and bundles
 resolve their default separately and pick memory when it is the only engine
 around.)
 
-`extensions/leveldb` is pure Go. `extensions/rocksdb` needs the `rocksdb`
+`extensions/leveldb`, `extensions/badgerdb`, and `extensions/boltdb` are pure
+Go; the BoltDB-compatible driver uses the maintained bbolt fork. `extensions/lmdb`
+requires CGo but bundles its LMDB source through the pinned binding. It uses a
+fixed 16 GiB virtual map and reports map-full explicitly; plan capacity before
+using it for larger stores. `extensions/rocksdb` needs the `rocksdb`
 build tag and the native library. `extensions/berkeleydb` is CGo-only and
 requires a separately chosen Berkeley DB distribution; the owner of a
 Berkeley DB-enabled binary must comply with that distribution's terms. It
@@ -259,8 +265,9 @@ db, err := kvlite.Open("./kvlite-level-data", kvlite.WithDriver("leveldb"))
 configuration-driven applications.
 
 `rocksdb` remains the compatibility default for `Open(path)`, but it is not
-linked unless `extensions/rocksdb` is imported. `leveldb` is a pure-Go optional
-extension. `berkeleydb` is an opt-in native extension: without its explicit
+linked unless `extensions/rocksdb` is imported. `leveldb`, `badgerdb`, and
+`boltdb` are pure-Go optional extensions; `lmdb` requires CGo. `berkeleydb` is
+an opt-in native extension: without its explicit
 import and `berkeleydb` build tag it returns `ErrDriverNotInstalled`; with the
 import but without native support it returns `ErrBerkeleyDBNotBuilt`. If a matching
 driver module is discoverable by `KVLITE_MODULE_PATH`/`KVLITE_HOME` but this process
@@ -476,6 +483,9 @@ Build one separately installable driver bundle on each native target:
 
 ```bash
 make release RELEASE_VERSION=v0.1.0 DRIVER=leveldb
+make release RELEASE_VERSION=v0.1.0 DRIVER=badgerdb
+make release RELEASE_VERSION=v0.1.0 DRIVER=boltdb
+make release RELEASE_VERSION=v0.1.0 DRIVER=lmdb
 make release RELEASE_VERSION=v0.1.0 DRIVER=rocksdb
 make release-http RELEASE_VERSION=v0.1.0
 make release-redis RELEASE_VERSION=v0.1.0

@@ -23,13 +23,23 @@ before this handoff document was added
 > real RocksDB runtime bundle; Windows runtime-bundle proof; and release
 > signing beyond checksums.
 
+> **Driver expansion, 2026-09-25:** `badgerdb`, `boltdb` (implemented with
+> bbolt), and `lmdb` are now separate optional modules under `extensions/`.
+> Each has a linked-Go path and a checksummed C-shared release bundle. Native
+> macOS ARM tests covered direct reopen/persistence, standalone HTTP/Redis
+> loading, and online installation with LMDB; the Go 1.23 suite passed. LMDB
+> uses the bundled 0.9 C source, a fixed 16 GiB virtual map, and ships both
+> binding and OpenLDAP license notices. No engine formats are interchangeable.
+> Sections below retain the original release-plan baseline where they name
+> only the first three drivers.
+
 ## Purpose
 
 Finish KVLite's extension-first distribution model without changing the
 embedded-first product contract:
 
 - core opens no storage engine and starts no listener by default;
-- RocksDB, LevelDB, and Berkeley DB are storage-driver extensions;
+- RocksDB, LevelDB, BadgerDB, BoltDB, LMDB, and Berkeley DB are storage-driver extensions;
 - HTTP and Redis are separately installed protocol extensions;
 - a host discovers only explicit, checksummed module directories at runtime;
 - users install only the driver and protocol artifacts they need.
@@ -43,7 +53,7 @@ multi-protocol shared-owner IPC design are deliberately separate milestones.
 | Area | Agreed contract |
 | --- | --- |
 | Core | `github.com/webong/kvlite` remains embeddable. It has no default linked driver or network listener. |
-| Driver choice | `WithDriver("rocksdb"|"leveldb"|"berkeleydb")` selects the engine when a local DB is first opened. `KVLITE-MANIFEST.json` persists that choice and rejects a different engine on reopen. Engine directories are never interchangeable. |
+| Driver choice | `WithDriver(...)` selects an installed engine when a local DB is first opened. `KVLITE-MANIFEST.json` persists that choice and rejects a different engine on reopen. Engine directories are never interchangeable. |
 | Driver distribution | Every driver is an extension under `extensions/`. A packaged driver currently exposes a checksummed `c-shared` KVLite ABI bundle, loaded through the module driver loader. |
 | Protocol distribution | HTTP and Redis are extensions, never a mandatory core dependency. A standalone module is an executable discovered from an explicit module directory and launched with `kvlite module run`. |
 | Remote driver selection | A remote client may request a driver by name. The server resolves only its installed/server-owned driver mappings; it must return a clear unavailable/not-exposed error, and must never accept a client filesystem path. |

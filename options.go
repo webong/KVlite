@@ -89,7 +89,7 @@ func WithRegisteredCodec(codec Codec) Option {
 }
 
 // WithMemoryBudget derives a conservative profile from one total memory
-// allowance. RocksDB and LevelDB both use the cache and write-buffer portions
+// allowance. RocksDB, LevelDB, and BadgerDB use the cache and write-buffer portions
 // of this profile. The budget must be at least 24 MiB.
 func WithMemoryBudget(bytes int) Option {
 	return func(cfg *config) error {

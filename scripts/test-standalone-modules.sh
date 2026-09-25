@@ -8,7 +8,7 @@
 # database directories, shared-owner operation on one directory, and the
 # missing-driver error path.
 #
-#   KVLITE_STANDALONE_DRIVER=rocksdb bash scripts/test-standalone-modules.sh
+#   KVLITE_STANDALONE_DRIVER=lmdb bash scripts/test-standalone-modules.sh
 #
 # runs the identical flow against RocksDB (needs its native toolchain).
 # Socket tests need loopback networking; run on a native CI runner, not in a
@@ -29,8 +29,8 @@ version="${KVLITE_STANDALONE_TEST_VERSION:-standalone-test}"
 target="$(go env GOHOSTOS)-$(go env GOHOSTARCH)"
 driver="${KVLITE_STANDALONE_DRIVER:-leveldb}"
 case "$driver" in
-  leveldb|rocksdb) ;;
-  *) fail "unsupported KVLITE_STANDALONE_DRIVER: $driver (expected leveldb or rocksdb)" ;;
+  leveldb|rocksdb|badgerdb|boltdb|lmdb) ;;
+  *) fail "unsupported KVLITE_STANDALONE_DRIVER: $driver (expected leveldb, rocksdb, badgerdb, boltdb, or lmdb)" ;;
 esac
 # The missing-driver probe must name a driver that is genuinely absent.
 if [[ "$driver" == "leveldb" ]]; then

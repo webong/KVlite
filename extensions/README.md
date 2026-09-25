@@ -8,6 +8,9 @@ including storage-engine drivers.
 | --- | --- | --- | --- |
 | [`rocksdb/`](rocksdb/) | Driver | `github.com/webong/kvlite/extensions/rocksdb` | Requires the `rocksdb` build tag and a compatible RocksDB library. |
 | [`leveldb/`](leveldb/) | Driver | `github.com/webong/kvlite/extensions/leveldb` | Pure-Go LevelDB implementation. |
+| [`badgerdb/`](badgerdb/) | Driver | `github.com/webong/kvlite/extensions/badgerdb` | Pure-Go Badger v4 implementation. |
+| [`boltdb/`](boltdb/) | Driver | `github.com/webong/kvlite/extensions/boltdb` | Pure-Go BoltDB-compatible implementation backed by bbolt. |
+| [`lmdb/`](lmdb/) | Driver | `github.com/webong/kvlite/extensions/lmdb` | CGo binding with bundled LMDB 0.9 source; 16 GiB virtual map. |
 | [`berkeleydb/`](berkeleydb/) | Driver | `github.com/webong/kvlite/extensions/berkeleydb` | CGo-only; the application owner supplies a licensed Berkeley DB C library. |
 | [`http/`](http/) | Transport | `github.com/webong/kvlite/extensions/http` | Explicit JSON/HTTP owner and client extension. |
 | [`redis/`](redis/) | Transport | `github.com/webong/kvlite/extensions/redis` | Explicit Redis RESP2 server extension. |
@@ -41,6 +44,17 @@ See
 Berkeley DB is importable only as an explicit CGo extension. It is excluded from
 the standard release workflow and requires a Berkeley DB distribution the
 application owner is entitled to use.
+
+BadgerDB and BoltDB require no external C library. The `boltdb` selection uses
+the maintained `go.etcd.io/bbolt` fork and stores its database in
+`KVLITE-BOLT.db`. LMDB needs `CGO_ENABLED=1` but does not need a system LMDB
+library: the pinned PowerDNS binding bundles the LMDB C source. Its fixed
+16 GiB map is virtual address space rather than immediate disk allocation on
+sparse filesystems; reaching the limit returns an explicit error instead of
+resizing behind other readers. LMDB bundle metadata names both the binding's
+BSD-3-Clause license and the bundled C source's OpenLDAP license. LMDB also
+limits raw storage-key length (usually 511 bytes); KVLite reports the limit
+when an encoded key exceeds it.
 
 Each implemented nested module is versioned independently. New release tags
 use paths such as `extensions/leveldb/v0.1.0` and
