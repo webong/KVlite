@@ -29,7 +29,7 @@ func Manifest() kvlite.ModuleManifest {
 	return kvlite.ModuleManifest{
 		SchemaVersion: kvlite.ModuleManifestVersion,
 		Name:          "redis",
-		Kind:          kvlite.ModuleKindExtension,
+		Kind:          kvlite.ModuleKindTransport,
 		Version:       "v0.1.0",
 		ModuleABI:     kvlite.ModuleABIVersion,
 		Capabilities:  []string{"redis-resp2", "redis-server"},

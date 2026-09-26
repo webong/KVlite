@@ -38,7 +38,7 @@ func Manifest() kvlite.ModuleManifest {
 	return kvlite.ModuleManifest{
 		SchemaVersion: kvlite.ModuleManifestVersion,
 		Name:          "http",
-		Kind:          kvlite.ModuleKindExtension,
+		Kind:          kvlite.ModuleKindTransport,
 		Version:       "v0.1.0",
 		ModuleABI:     kvlite.ModuleABIVersion,
 		Capabilities:  []string{"http-client", "http-server", "remote-driver-selection"},

@@ -1,10 +1,10 @@
 # KVLite
 
-KVLite is an engine-neutral, typed key-value core. Storage engines are normal
-optional driver modules—not dependencies pulled into every application. The
-core provides serialization, per-record TTLs, collections, metadata checks,
-and migrations; a driver supplies the local storage engine. HTTP and Redis are
-explicitly installed extensions, while the C ABI is an embedded boundary. Go
+KVLite is an engine-neutral, typed key-value core. Storage engines are optional
+engine extensions—not dependencies pulled into every application. Each engine
+extension contains a driver implementation. The core provides serialization,
+per-record TTLs, collections, metadata checks, and migrations; HTTP and Redis
+are transport extensions, while the C ABI is an embedded boundary. Go
 is the implementation language, not the required application language: other
 languages use an optional server extension or a driver-specific C bundle.
 

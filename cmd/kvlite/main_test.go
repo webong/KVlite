@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,6 +65,42 @@ func TestModuleListShowsLinkedModuleMetadata(t *testing.T) {
 	}
 }
 
+func TestModuleListShowsCombinedExtensionKinds(t *testing.T) {
+	root := t.TempDir()
+	packageDir := filepath.Join(root, "combo")
+	if err := os.MkdirAll(packageDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := []byte(`{"schema_version":2,"name":"combo","kinds":["engine","transport"],"version":"v0.1.0","module_abi":1,"driver":"combo-engine","license":"Apache-2.0"}`)
+	if err := os.WriteFile(filepath.Join(packageDir, kvlite.ModuleManifestFilename), manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KVLITE_MODULE_PATH", root)
+	t.Setenv("KVLITE_HOME", "")
+	t.Setenv("KVLITE_SYSTEM_MODULE_PATH", "")
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+	code := run([]string{"module", "list"})
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || !strings.Contains(string(output), "combo\tkinds=engine,transport\t") {
+		t.Fatalf("run(module list) = %d, output %q", code, output)
+	}
+}
+
 func TestModuleCommandRejectsUnknownSubcommand(t *testing.T) {
 	if got := run([]string{"module", "install"}); got != 2 {
 		t.Fatalf("run(module install) = %d, want 2", got)
@@ -84,7 +122,7 @@ func TestModuleVerifyChecksDiscoveredBundle(t *testing.T) {
 	manifest := []byte(`{
   "schema_version": 1,
   "name": "leveldb",
-  "kind": "driver",
+  "kind": "engine",
   "version": "v0.1.0",
   "module_abi": 1,
   "driver": "leveldb",
@@ -157,7 +195,7 @@ func main() {
 	manifest := fmt.Sprintf(`{
   "schema_version": 1,
   "name": "redis",
-  "kind": "extension",
+  "kind": "transport",
   "version": "v0.1.0",
   "module_abi": 1,
   "capabilities": ["redis-resp2", "redis-server"],
@@ -239,7 +277,7 @@ func main() {
 	manifest := fmt.Sprintf(`{
   "schema_version": 1,
   "name": "http",
-  "kind": "extension",
+  "kind": "transport",
   "version": "v0.1.0",
   "module_abi": 1,
   "capabilities": ["http-client", "http-server"],
@@ -330,7 +368,7 @@ func main() {
 	manifest := fmt.Sprintf(`{
   "schema_version": 1,
   "name": "http",
-  "kind": "extension",
+  "kind": "transport",
   "version": "v0.1.0",
   "module_abi": 1,
   "capabilities": ["http-client", "http-server"],
@@ -418,7 +456,7 @@ func main() {
 	manifest := fmt.Sprintf(`{
   "schema_version": 1,
   "name": "redis",
-  "kind": "extension",
+  "kind": "transport",
   "version": "v0.1.0",
   "module_abi": 1,
   "capabilities": ["redis-resp2", "redis-server"],
@@ -763,7 +801,7 @@ func buildFakeModule(t *testing.T, root, name string, capabilities []string, pro
 	manifest := fmt.Sprintf(`{
   "schema_version": 1,
   "name": %q,
-  "kind": "extension",
+  "kind": "transport",
   "version": "v0.1.0",
   "module_abi": 1,
   "capabilities": %s,
@@ -842,7 +880,7 @@ func main() {
 	manifest := fmt.Sprintf(`{
   "schema_version": 1,
   "name": "redis",
-  "kind": "extension",
+  "kind": "transport",
   "version": "v0.1.0",
   "module_abi": 1,
   "capabilities": ["redis-resp2", "redis-server"],

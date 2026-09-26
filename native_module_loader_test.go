@@ -36,7 +36,7 @@ func TestNativeModuleDriverLoad(t *testing.T) {
 	}
 	checksum := sha256.Sum256(payload)
 	manifest := testExtensionManifest("memdb")
-	manifest.Kind = ModuleKindDriver
+	manifest.Kind = ModuleKindEngine
 	manifest.Driver = "memdb"
 	manifest.Capabilities = []string{"embedded-storage"}
 	manifest.Artifacts = []ModuleArtifact{{
@@ -123,7 +123,7 @@ func TestNativeModuleDriverRejectsUnknownSymbol(t *testing.T) {
 	}
 	checksum := sha256.Sum256(payload)
 	manifest := testExtensionManifest("memdb-bad-symbol")
-	manifest.Kind = ModuleKindDriver
+	manifest.Kind = ModuleKindEngine
 	manifest.Driver = "memdb-bad-symbol"
 	manifest.Artifacts = []ModuleArtifact{{
 		Platform: runtime.GOOS + "-" + runtime.GOARCH,
@@ -165,7 +165,7 @@ func TestNativeModuleDriverRejectsUnprovidedCapability(t *testing.T) {
 	}
 	checksum := sha256.Sum256(payload)
 	manifest := testExtensionManifest("memdb-capabilities")
-	manifest.Kind = ModuleKindDriver
+	manifest.Kind = ModuleKindEngine
 	manifest.Driver = "memdb-capabilities"
 	manifest.Capabilities = []string{"embedded-storage", "snapshot-scan"}
 	manifest.Artifacts = []ModuleArtifact{{
@@ -200,7 +200,7 @@ func TestNativeModuleDriverRejectsIncompatibleModuleABI(t *testing.T) {
 			}
 			checksum := sha256.Sum256(payload)
 			manifest := testExtensionManifest(name)
-			manifest.Kind = ModuleKindDriver
+			manifest.Kind = ModuleKindEngine
 			manifest.Driver = DriverName(name)
 			manifest.Capabilities = []string{"embedded-storage"}
 			manifest.ModuleABI = version

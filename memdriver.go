@@ -24,7 +24,7 @@ func init() {
 	MustRegisterLinkedModule(ModuleManifest{
 		SchemaVersion: ModuleManifestVersion,
 		Name:          string(DriverMemory),
-		Kind:          ModuleKindDriver,
+		Kind:          ModuleKindEngine,
 		Version:       "v0.1.0",
 		ModuleABI:     ModuleABIVersion,
 		Driver:        DriverMemory,

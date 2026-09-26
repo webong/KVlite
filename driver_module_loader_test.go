@@ -134,7 +134,7 @@ func openRuntimeModuleDB(t *testing.T, root string) *DB {
 
 	checksum := sha256.Sum256(payload)
 	manifest := testExtensionManifest(string(DriverLevelDB))
-	manifest.Kind = ModuleKindDriver
+	manifest.Kind = ModuleKindEngine
 	manifest.Driver = DriverLevelDB
 	manifest.Artifacts = []ModuleArtifact{{
 		Platform: runtime.GOOS + "-" + runtime.GOARCH,

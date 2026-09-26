@@ -27,7 +27,7 @@ func TestDiscoverModulesAndVerifyArtifacts(t *testing.T) {
 	writeTestModuleManifest(t, directory, ModuleManifest{
 		SchemaVersion: ModuleManifestVersion,
 		Name:          "rocksdb",
-		Kind:          ModuleKindDriver,
+		Kind:          ModuleKindEngine,
 		Version:       "v0.1.0",
 		ModuleABI:     ModuleABIVersion,
 		Driver:        DriverRocksDB,
@@ -84,11 +84,153 @@ func TestDiscoverModulesReadsDirectModuleDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if module.Manifest.Kind != ModuleKindExtension || module.Manifest.Name != "http" {
+	if module.Manifest.Kind != ModuleKindTransport || module.Manifest.Name != "http" {
 		t.Fatalf("FindInstalledModule() = %#v", module)
 	}
 	if err := module.Verify(); !errors.Is(err, ErrModuleArtifactMissing) {
 		t.Fatalf("Verify() error = %v, want ErrModuleArtifactMissing", err)
+	}
+}
+
+func TestModuleKindSeparatesEngineAndTransport(t *testing.T) {
+	engine := testExtensionManifest("rocksdb")
+	engine.Kind = ModuleKindEngine
+	engine.Driver = DriverRocksDB
+	if err := engine.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	transport := testExtensionManifest("http")
+	if err := transport.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	transport.Driver = DriverRocksDB
+	if err := transport.Validate(); !errors.Is(err, ErrModuleManifestInvalid) {
+		t.Fatalf("transport with driver error = %v, want ErrModuleManifestInvalid", err)
+	}
+	engine.Driver = ""
+	if err := engine.Validate(); !errors.Is(err, ErrModuleManifestInvalid) {
+		t.Fatalf("engine without driver error = %v, want ErrModuleManifestInvalid", err)
+	}
+}
+
+func TestMultiKindExtensionProvidesEngineAndTransport(t *testing.T) {
+	root := t.TempDir()
+	manifest := testExtensionManifest("combo")
+	manifest.SchemaVersion = ModuleManifestMultiKindVersion
+	manifest.Kind = ""
+	manifest.Kinds = []ModuleKind{ModuleKindEngine, ModuleKindTransport}
+	manifest.Driver = "combo-engine"
+	manifest.Artifacts = []ModuleArtifact{
+		{Platform: runtime.GOOS + "-" + runtime.GOARCH, Kind: ModuleArtifactCShared, Path: "lib/engine.test"},
+		{Platform: runtime.GOOS + "-" + runtime.GOARCH, Kind: ModuleArtifactExecutable, Path: "bin/transport.test"},
+	}
+	for index := range manifest.Artifacts {
+		artifact := &manifest.Artifacts[index]
+		artifactPath := filepath.Join(root, manifest.Name, filepath.FromSlash(artifact.Path))
+		if err := os.MkdirAll(filepath.Dir(artifactPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		payload := []byte(artifact.Kind)
+		if err := os.WriteFile(artifactPath, payload, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		artifact.SHA256 = hex.EncodeToString(digest[:])
+	}
+	writeTestModuleManifest(t, filepath.Join(root, manifest.Name), manifest)
+
+	module, err := FindInstalledModule("combo", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !module.Manifest.Provides(ModuleKindEngine) || !module.Manifest.Provides(ModuleKindTransport) {
+		t.Fatalf("multi-kind extension lost a capability: %#v", module.Manifest)
+	}
+	kinds := module.Manifest.ProvidedKinds()
+	kinds[0] = ModuleKindTransport
+	if !module.Manifest.Provides(ModuleKindEngine) {
+		t.Fatal("ProvidedKinds exposed mutable manifest metadata")
+	}
+	if err := module.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ResolveModuleExecutable("combo", root); err != nil {
+		t.Fatalf("transport artifact cannot be resolved: %v", err)
+	}
+	t.Setenv("KVLITE_MODULE_PATH", root)
+	t.Setenv("KVLITE_HOME", "")
+	t.Setenv("KVLITE_SYSTEM_MODULE_PATH", "")
+	driverModule, err := resolveModuleForDriver("combo-engine")
+	if err != nil {
+		t.Fatalf("engine driver cannot be resolved: %v", err)
+	}
+	if driverModule.Manifest.Name != "combo" {
+		t.Fatalf("engine driver resolved %q, want combo", driverModule.Manifest.Name)
+	}
+}
+
+func TestResolveModuleForDriverRejectsDuplicateClaims(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"first", "second"} {
+		manifest := testExtensionManifest(name)
+		manifest.SchemaVersion = ModuleManifestMultiKindVersion
+		manifest.Kind = ""
+		manifest.Kinds = []ModuleKind{ModuleKindEngine, ModuleKindTransport}
+		manifest.Driver = "same-engine"
+		writeTestModuleManifest(t, filepath.Join(root, name), manifest)
+	}
+	t.Setenv("KVLITE_MODULE_PATH", root)
+	t.Setenv("KVLITE_HOME", "")
+	t.Setenv("KVLITE_SYSTEM_MODULE_PATH", "")
+	if _, err := resolveModuleForDriver("same-engine"); !errors.Is(err, ErrModuleConflict) {
+		t.Fatalf("resolveModuleForDriver() error = %v, want ErrModuleConflict", err)
+	}
+}
+
+func TestMultiKindManifestRejectsInvalidDeclarations(t *testing.T) {
+	valid := testExtensionManifest("combo")
+	valid.SchemaVersion = ModuleManifestMultiKindVersion
+	valid.Kind = ""
+	valid.Kinds = []ModuleKind{ModuleKindEngine, ModuleKindTransport}
+	valid.Driver = "combo-engine"
+	for _, test := range []struct {
+		name   string
+		mutate func(*ModuleManifest)
+	}{
+		{"missing kinds", func(manifest *ModuleManifest) { manifest.Kinds = nil }},
+		{"both kind fields", func(manifest *ModuleManifest) { manifest.Kind = ModuleKindEngine }},
+		{"duplicate kind", func(manifest *ModuleManifest) { manifest.Kinds = []ModuleKind{ModuleKindEngine, ModuleKindEngine} }},
+		{"legacy kind in v2", func(manifest *ModuleManifest) { manifest.Kinds[0] = "driver" }},
+		{"engine without driver", func(manifest *ModuleManifest) { manifest.Driver = "" }},
+		{"transport only with driver", func(manifest *ModuleManifest) { manifest.Kinds = []ModuleKind{ModuleKindTransport} }},
+		{"v1 with kinds", func(manifest *ModuleManifest) { manifest.SchemaVersion = ModuleManifestVersion }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manifest := cloneModuleManifest(valid)
+			test.mutate(&manifest)
+			if err := manifest.Validate(); !errors.Is(err, ErrModuleManifestInvalid) {
+				t.Fatalf("Validate() error = %v, want ErrModuleManifestInvalid", err)
+			}
+		})
+	}
+}
+
+func TestLegacyModuleKindsNormalizeOnDiscovery(t *testing.T) {
+	root := t.TempDir()
+	engine := testExtensionManifest("old-engine")
+	engine.Kind = "driver"
+	engine.Driver = "old-engine"
+	writeTestModuleManifest(t, filepath.Join(root, engine.Name), engine)
+	transport := testExtensionManifest("old-transport")
+	transport.Kind = "extension"
+	writeTestModuleManifest(t, filepath.Join(root, transport.Name), transport)
+
+	modules, err := DiscoverModules(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(modules) != 2 || modules[0].Manifest.Kind != ModuleKindEngine || modules[1].Manifest.Kind != ModuleKindTransport {
+		t.Fatalf("legacy kinds were not normalized: %#v", modules)
 	}
 }
 
@@ -284,6 +426,13 @@ func TestSourceModuleManifestsAreDiscoverable(t *testing.T) {
 	got := make([]string, 0, len(modules))
 	for _, module := range modules {
 		got = append(got, module.Manifest.Name)
+		wantKind := ModuleKindEngine
+		if module.Manifest.Name == "http" || module.Manifest.Name == "redis" {
+			wantKind = ModuleKindTransport
+		}
+		if module.Manifest.Kind != wantKind {
+			t.Errorf("module %q kind = %q, want %q", module.Manifest.Name, module.Manifest.Kind, wantKind)
+		}
 	}
 	want := []string{"badgerdb", "berkeleydb", "boltdb", "http", "leveldb", "lmdb", "redis", "rocksdb"}
 	if !slices.Equal(got, want) {
@@ -293,7 +442,10 @@ func TestSourceModuleManifestsAreDiscoverable(t *testing.T) {
 
 func TestGroupedCatalogRootDiscoversDriversAndModules(t *testing.T) {
 	root := t.TempDir()
-	writeTestModuleManifest(t, filepath.Join(root, "drivers", "leveldb"), testExtensionManifest("leveldb"))
+	engine := testExtensionManifest("leveldb")
+	engine.Kind = ModuleKindEngine
+	engine.Driver = DriverLevelDB
+	writeTestModuleManifest(t, filepath.Join(root, "drivers", "leveldb"), engine)
 	writeTestModuleManifest(t, filepath.Join(root, "modules", "http"), testExtensionManifest("http"))
 	modules, err := DiscoverModules(root)
 	if err != nil {
@@ -312,7 +464,7 @@ func testExtensionManifest(name string) ModuleManifest {
 	return ModuleManifest{
 		SchemaVersion: ModuleManifestVersion,
 		Name:          name,
-		Kind:          ModuleKindExtension,
+		Kind:          ModuleKindTransport,
 		Version:       "v0.1.0",
 		ModuleABI:     ModuleABIVersion,
 		Capabilities:  []string{"network-server"},

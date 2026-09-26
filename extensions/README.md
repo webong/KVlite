@@ -6,14 +6,19 @@ including storage-engine drivers.
 
 | Extension | Kind | Go module | Notes |
 | --- | --- | --- | --- |
-| [`rocksdb/`](rocksdb/) | Driver | `github.com/webong/kvlite/extensions/rocksdb` | Requires the `rocksdb` build tag and a compatible RocksDB library. |
-| [`leveldb/`](leveldb/) | Driver | `github.com/webong/kvlite/extensions/leveldb` | Pure-Go LevelDB implementation. |
-| [`badgerdb/`](badgerdb/) | Driver | `github.com/webong/kvlite/extensions/badgerdb` | Pure-Go Badger v4 implementation. |
-| [`boltdb/`](boltdb/) | Driver | `github.com/webong/kvlite/extensions/boltdb` | Pure-Go BoltDB-compatible implementation backed by bbolt. |
-| [`lmdb/`](lmdb/) | Driver | `github.com/webong/kvlite/extensions/lmdb` | CGo binding with bundled LMDB 0.9 source; 16 GiB virtual map. |
-| [`berkeleydb/`](berkeleydb/) | Driver | `github.com/webong/kvlite/extensions/berkeleydb` | CGo-only; the application owner supplies a licensed Berkeley DB C library. |
+| [`rocksdb/`](rocksdb/) | Engine | `github.com/webong/kvlite/extensions/rocksdb` | Requires the `rocksdb` build tag and a compatible RocksDB library. |
+| [`leveldb/`](leveldb/) | Engine | `github.com/webong/kvlite/extensions/leveldb` | Pure-Go LevelDB implementation. |
+| [`badgerdb/`](badgerdb/) | Engine | `github.com/webong/kvlite/extensions/badgerdb` | Pure-Go Badger v4 implementation. |
+| [`boltdb/`](boltdb/) | Engine | `github.com/webong/kvlite/extensions/boltdb` | Pure-Go BoltDB-compatible implementation backed by bbolt. |
+| [`lmdb/`](lmdb/) | Engine | `github.com/webong/kvlite/extensions/lmdb` | CGo binding with bundled LMDB 0.9 source; 16 GiB virtual map. |
+| [`berkeleydb/`](berkeleydb/) | Engine | `github.com/webong/kvlite/extensions/berkeleydb` | CGo-only; the application owner supplies a licensed Berkeley DB C library. |
 | [`http/`](http/) | Transport | `github.com/webong/kvlite/extensions/http` | Explicit JSON/HTTP owner and client extension. |
 | [`redis/`](redis/) | Transport | `github.com/webong/kvlite/extensions/redis` | Explicit Redis RESP2 server extension. |
+
+Each row is a KVLite extension. The listed packages each provide one kind,
+but a package may provide both an engine and a transport. An engine driver is selected with
+`WithDriver(...)`; HTTP and Redis are transport drivers that must be started
+explicitly and are not selected when opening a database.
 
 For an embedded LevelDB database, choose and link only the extension you need:
 

@@ -84,6 +84,10 @@ list_output="$("$cli_bin" module list)"
 for name in "$driver" http redis; do
   echo "$list_output" | grep -q "^$name[[:space:]]" || fail "module list missing $name (got: $list_output)"
 done
+echo "$list_output" | grep -q "^$driver[[:space:]]kind=engine[[:space:]]" || fail "$driver is not listed as an engine extension"
+for name in http redis; do
+  echo "$list_output" | grep -q "^$name[[:space:]]kind=transport[[:space:]]" || fail "$name is not listed as a transport extension"
+done
 
 echo "standalone-modules test: module verify checks checksums" >&2
 "$cli_bin" module verify "$driver" >/dev/null || fail "verify $driver failed"

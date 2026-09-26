@@ -23,8 +23,11 @@ const (
 	// KVLite module catalog. The resolver deliberately never scans arbitrary
 	// shared libraries from the current directory.
 	ModuleManifestFilename = "kvlite-module.json"
-	// ModuleManifestVersion describes the JSON manifest schema.
+	// ModuleManifestVersion is the original single-kind JSON manifest schema.
 	ModuleManifestVersion = 1
+	// ModuleManifestMultiKindVersion allows one extension to declare multiple
+	// provided kinds without changing the meaning of v1's singular kind field.
+	ModuleManifestMultiKindVersion = 2
 	// ModuleABIVersion is the compatibility number shared by a host and an
 	// independently distributed module. It is distinct from the C embedding ABI
 	// exposed by capi/kvlite.h.
@@ -35,12 +38,33 @@ const (
 type ModuleKind string
 
 const (
-	// ModuleKindDriver contains an embedded storage-engine implementation.
-	ModuleKindDriver ModuleKind = "driver"
-	// ModuleKindExtension contains an optional capability such as HTTP or
-	// Redis. KVLite core remains embeddable without one.
-	ModuleKindExtension ModuleKind = "extension"
+	// ModuleKindEngine identifies an extension that provides a storage engine
+	// through a KVLite driver implementation.
+	ModuleKindEngine ModuleKind = "engine"
+	// ModuleKindTransport identifies an extension that exposes a protocol such
+	// as HTTP or Redis. KVLite core remains embeddable without one.
+	ModuleKindTransport ModuleKind = "transport"
+	// ModuleKindDriver is the old source spelling of ModuleKindEngine.
+	// Deprecated: use ModuleKindEngine.
+	ModuleKindDriver = ModuleKindEngine
+	// ModuleKindExtension is the old source spelling for transport modules.
+	// Deprecated: use ModuleKindTransport.
+	ModuleKindExtension = ModuleKindTransport
 )
+
+// canonicalModuleKind accepts earlier manifest labels while exposing one
+// capability-based vocabulary to callers. Newly written manifests always use
+// engine or transport; the legacy labels remain readable in installed bundles.
+func canonicalModuleKind(kind ModuleKind) ModuleKind {
+	switch kind {
+	case "driver":
+		return ModuleKindEngine
+	case "extension":
+		return ModuleKindTransport
+	default:
+		return kind
+	}
+}
 
 // ModuleArtifactKind identifies a packaged module artifact. The current
 // release builder emits c-shared and executable artifacts. Native modules are
@@ -76,21 +100,44 @@ type ModuleArtifact struct {
 }
 
 // ModuleManifest is the portable, inspectable description of one optional
-// KVLite capability. It describes an artifact; discovery does not execute it.
-// A caller must explicitly choose a driver or enable an extension afterwards.
+// KVLite extension. It describes artifacts; discovery does not execute them.
+// A caller must explicitly choose a driver or enable a transport afterwards.
 type ModuleManifest struct {
-	SchemaVersion int        `json:"schema_version"`
-	Name          string     `json:"name"`
-	Kind          ModuleKind `json:"kind"`
-	Version       string     `json:"version"`
-	ModuleABI     int        `json:"module_abi"`
-	// Driver is required only for a storage driver and is the name accepted by
-	// WithDriver. Extensions leave it empty.
+	SchemaVersion int    `json:"schema_version"`
+	Name          string `json:"name"`
+	// Kind is the sole provided kind in v1 manifests. V2 manifests use Kinds.
+	Kind      ModuleKind   `json:"kind,omitempty"`
+	Kinds     []ModuleKind `json:"kinds,omitempty"`
+	Version   string       `json:"version"`
+	ModuleABI int          `json:"module_abi"`
+	// Driver names the storage adapter if this extension provides an engine.
+	// WithDriver selects it; transport-only extensions leave the field empty.
 	Driver       DriverName         `json:"driver,omitempty"`
 	Capabilities []string           `json:"capabilities,omitempty"`
 	Dependencies []ModuleDependency `json:"dependencies,omitempty"`
 	Artifacts    []ModuleArtifact   `json:"artifacts,omitempty"`
 	License      string             `json:"license"`
+}
+
+// ProvidedKinds reports the capabilities an extension offers. The returned
+// slice is detached from the manifest so callers cannot mutate its metadata.
+func (manifest ModuleManifest) ProvidedKinds() []ModuleKind {
+	if manifest.SchemaVersion == ModuleManifestVersion {
+		return []ModuleKind{canonicalModuleKind(manifest.Kind)}
+	}
+	kinds := make([]ModuleKind, len(manifest.Kinds))
+	copy(kinds, manifest.Kinds)
+	return kinds
+}
+
+// Provides reports whether an extension offers an engine or transport.
+func (manifest ModuleManifest) Provides(kind ModuleKind) bool {
+	for _, provided := range manifest.ProvidedKinds() {
+		if provided == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // Module is a manifest paired with the location from which it was discovered.
@@ -112,6 +159,7 @@ var linkedModuleRegistry = struct {
 // the current process. It keeps the existing normal-Go-import experience while
 // using the same manifest shape as packaged artifacts.
 func RegisterLinkedModule(manifest ModuleManifest) error {
+	manifest.Kind = canonicalModuleKind(manifest.Kind)
 	if err := manifest.Validate(); err != nil {
 		return err
 	}
@@ -357,8 +405,8 @@ func (module Module) Verify() error {
 // it for discovery. It intentionally does not check whether artifacts exist;
 // use Module.Verify after discovery for that operation.
 func (manifest ModuleManifest) Validate() error {
-	if manifest.SchemaVersion != ModuleManifestVersion {
-		return fmt.Errorf("%w: module %q uses schema version %d, expected %d", ErrModuleManifestInvalid, manifest.Name, manifest.SchemaVersion, ModuleManifestVersion)
+	if manifest.SchemaVersion != ModuleManifestVersion && manifest.SchemaVersion != ModuleManifestMultiKindVersion {
+		return fmt.Errorf("%w: module %q uses unsupported schema version %d", ErrModuleManifestInvalid, manifest.Name, manifest.SchemaVersion)
 	}
 	canonicalName, err := normalizeModuleName(manifest.Name)
 	if err != nil {
@@ -367,8 +415,23 @@ func (manifest ModuleManifest) Validate() error {
 	if manifest.Name != canonicalName {
 		return fmt.Errorf("%w: module name %q must be canonical %q", ErrModuleManifestInvalid, manifest.Name, canonicalName)
 	}
-	if manifest.Kind != ModuleKindDriver && manifest.Kind != ModuleKindExtension {
-		return fmt.Errorf("%w: module %q has unsupported kind %q", ErrModuleManifestInvalid, manifest.Name, manifest.Kind)
+	if manifest.SchemaVersion == ModuleManifestVersion {
+		if manifest.Kind == "" || len(manifest.Kinds) != 0 {
+			return fmt.Errorf("%w: v1 module %q requires only a singular kind", ErrModuleManifestInvalid, manifest.Name)
+		}
+	} else if manifest.Kind != "" || len(manifest.Kinds) == 0 {
+		return fmt.Errorf("%w: v2 module %q requires kinds and no singular kind", ErrModuleManifestInvalid, manifest.Name)
+	}
+	kinds := manifest.ProvidedKinds()
+	seenKinds := make(map[ModuleKind]struct{}, len(kinds))
+	for _, kind := range kinds {
+		if kind != ModuleKindEngine && kind != ModuleKindTransport {
+			return fmt.Errorf("%w: module %q has unsupported kind %q", ErrModuleManifestInvalid, manifest.Name, kind)
+		}
+		if _, seen := seenKinds[kind]; seen {
+			return fmt.Errorf("%w: module %q declares kind %q more than once", ErrModuleManifestInvalid, manifest.Name, kind)
+		}
+		seenKinds[kind] = struct{}{}
 	}
 	if strings.TrimSpace(manifest.Version) == "" || strings.IndexFunc(manifest.Version, unicodeWhitespace) >= 0 {
 		return fmt.Errorf("%w: module %q must provide a non-whitespace version", ErrModuleManifestInvalid, manifest.Name)
@@ -379,7 +442,7 @@ func (manifest ModuleManifest) Validate() error {
 	if strings.TrimSpace(manifest.License) == "" {
 		return fmt.Errorf("%w: module %q must declare a license", ErrModuleManifestInvalid, manifest.Name)
 	}
-	if manifest.Kind == ModuleKindDriver {
+	if manifest.Provides(ModuleKindEngine) {
 		canonicalDriver, err := ParseDriverName(string(manifest.Driver))
 		if err != nil {
 			return fmt.Errorf("%w: module %q: %v", ErrModuleManifestInvalid, manifest.Name, err)
@@ -388,7 +451,7 @@ func (manifest ModuleManifest) Validate() error {
 			return fmt.Errorf("%w: module %q driver %q must be canonical %q", ErrModuleManifestInvalid, manifest.Name, manifest.Driver, canonicalDriver)
 		}
 	} else if manifest.Driver != "" {
-		return fmt.Errorf("%w: extension module %q cannot select driver %q", ErrModuleManifestInvalid, manifest.Name, manifest.Driver)
+		return fmt.Errorf("%w: transport module %q cannot select driver %q", ErrModuleManifestInvalid, manifest.Name, manifest.Driver)
 	}
 	if err := validateModuleTokens(manifest.Name, "capability", manifest.Capabilities); err != nil {
 		return err
@@ -511,6 +574,7 @@ func readModuleAt(directory string) (Module, bool, error) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return Module{}, false, fmt.Errorf("%w: %q contains multiple JSON values", ErrModuleManifestInvalid, manifestPath)
 	}
+	manifest.Kind = canonicalModuleKind(manifest.Kind)
 	if err := manifest.Validate(); err != nil {
 		return Module{}, false, fmt.Errorf("%w: %q: %w", ErrModuleManifestInvalid, manifestPath, err)
 	}
@@ -627,6 +691,7 @@ func uniqueModulePaths(paths []string) []string {
 
 func cloneModuleManifest(manifest ModuleManifest) ModuleManifest {
 	result := manifest
+	result.Kinds = append([]ModuleKind(nil), manifest.Kinds...)
 	result.Capabilities = append([]string(nil), manifest.Capabilities...)
 	result.Dependencies = append([]ModuleDependency(nil), manifest.Dependencies...)
 	result.Artifacts = append([]ModuleArtifact(nil), manifest.Artifacts...)

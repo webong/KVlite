@@ -277,12 +277,12 @@ func resolveLinkedDriverOrReportModule(name DriverName) (DriverName, registeredD
 	if !errors.Is(err, ErrDriverNotInstalled) {
 		return "", registeredDriver{}, err
 	}
-	module, moduleErr := ResolveModule(string(name))
+	module, moduleErr := resolveModuleForDriver(name)
 	if moduleErr != nil {
+		if !errors.Is(moduleErr, ErrModuleNotInstalled) {
+			return "", registeredDriver{}, moduleErr
+		}
 		return "", registeredDriver{}, err
-	}
-	if module.Manifest.Kind != ModuleKindDriver {
-		return "", registeredDriver{}, fmt.Errorf("%w: installed module %q is not a driver module", ErrDriverNotLoaded, name)
 	}
 	if _, err := module.ArtifactForCurrentPlatform(ModuleArtifactCShared, ModuleArtifactExecutable); err != nil {
 		return "", registeredDriver{}, fmt.Errorf("%w: installed driver %q is available, but this binary did not load its adapter: %v", ErrDriverNotLoaded, name, err)
@@ -290,13 +290,41 @@ func resolveLinkedDriverOrReportModule(name DriverName) (DriverName, registeredD
 	return "", registeredDriver{}, fmt.Errorf("%w: installed driver %q has a runtime module at %s that is not linked into this process", ErrDriverNotLoaded, name, module.Manifest.Name)
 }
 
-func resolveModuleDriver(name DriverName) (Module, error) {
-	module, err := ResolveModule(string(name))
+// resolveModuleForDriver selects an extension by its advertised storage
+// driver, which may differ from its package name when it also provides a
+// transport. Installed extensions take precedence over linked metadata.
+func resolveModuleForDriver(name DriverName) (Module, error) {
+	installed, err := DiscoverModules()
 	if err != nil {
 		return Module{}, err
 	}
-	if module.Manifest.Kind != ModuleKindDriver {
-		return Module{}, fmt.Errorf("%w: installed module %q is not a driver module", ErrDriverNotLoaded, name)
+	selectDriverModule := func(modules []Module) (Module, bool, error) {
+		var selected Module
+		found := false
+		for _, module := range modules {
+			if !module.Manifest.Provides(ModuleKindEngine) || module.Manifest.Driver != name {
+				continue
+			}
+			if found {
+				return Module{}, false, fmt.Errorf("%w: driver %q is provided by both %q and %q", ErrModuleConflict, name, selected.Manifest.Name, module.Manifest.Name)
+			}
+			selected, found = module, true
+		}
+		return selected, found, nil
+	}
+	if module, found, err := selectDriverModule(installed); err != nil || found {
+		return module, err
+	}
+	if module, found, err := selectDriverModule(LinkedModules()); err != nil || found {
+		return module, err
+	}
+	return Module{}, fmt.Errorf("%w: driver %q", ErrModuleNotInstalled, name)
+}
+
+func resolveModuleDriver(name DriverName) (Module, error) {
+	module, err := resolveModuleForDriver(name)
+	if err != nil {
+		return Module{}, err
 	}
 	if _, err := module.ArtifactForCurrentPlatform(ModuleArtifactCShared); err != nil {
 		return Module{}, fmt.Errorf("%w: installed driver %q is available, but this binary did not load its adapter: %v", ErrDriverNotLoaded, name, err)
@@ -308,15 +336,12 @@ func resolveModuleDriver(name DriverName) (Module, error) {
 }
 
 // resolveNativeModuleDriver resolves an installed in-process native driver
-// module: kind driver with a native-module artifact exporting
+// module: kind engine with a native-module artifact exporting
 // kvlite_module_init_v1. It verifies checksums but never loads code.
 func resolveNativeModuleDriver(name DriverName) (Module, error) {
-	module, err := ResolveModule(string(name))
+	module, err := resolveModuleForDriver(name)
 	if err != nil {
 		return Module{}, err
-	}
-	if module.Manifest.Kind != ModuleKindDriver {
-		return Module{}, fmt.Errorf("%w: installed module %q is not a driver module", ErrDriverNotLoaded, name)
 	}
 	artifact, err := module.ArtifactForCurrentPlatform(ModuleArtifactNative)
 	if err != nil {

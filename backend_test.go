@@ -132,7 +132,7 @@ func TestOpenRejectsUnavailableBerkeleyDBWithoutTouchingPath(t *testing.T) {
 func TestOpenDefaultDriverReportsInstalledButNotLoadedModule(t *testing.T) {
 	root := t.TempDir()
 	manifest := testExtensionManifest(string(DriverRocksDB))
-	manifest.Kind = ModuleKindDriver
+	manifest.Kind = ModuleKindEngine
 	manifest.Driver = DriverRocksDB
 	writeTestModuleManifest(t, filepath.Join(root, "rocksdb"), manifest)
 
@@ -148,7 +148,7 @@ func TestOpenDefaultDriverReportsInstalledButNotLoadedModule(t *testing.T) {
 func TestOpenReportsInstalledDriverModuleWithoutLinkedAdapter(t *testing.T) {
 	root := t.TempDir()
 	manifest := testExtensionManifest("leveldb")
-	manifest.Kind = ModuleKindDriver
+	manifest.Kind = ModuleKindEngine
 	manifest.Driver = DriverLevelDB
 	writeTestModuleManifest(t, filepath.Join(root, "leveldb"), manifest)
 

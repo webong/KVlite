@@ -24,7 +24,7 @@ func init() {
 func Manifest() kvlite.ModuleManifest {
 	return kvlite.ModuleManifest{
 		SchemaVersion: kvlite.ModuleManifestVersion,
-		Name:          string(Name), Kind: kvlite.ModuleKindDriver,
+		Name:          string(Name), Kind: kvlite.ModuleKindEngine,
 		Version: "v0.1.0", ModuleABI: kvlite.ModuleABIVersion,
 		Driver: Name, Capabilities: []string{"embedded-storage"}, License: "Apache-2.0",
 	}

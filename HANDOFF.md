@@ -33,6 +33,14 @@ before this handoff document was added
 > Sections below retain the original release-plan baseline where they name
 > only the first three drivers.
 
+> **Manifest vocabulary, 2026-09-25:** Every installable capability is a
+> KVLite extension. Schema v1 uses `kind` for one capability; schema v2 uses
+> `kinds` when a package provides an engine and a transport together. A driver
+> is an implementation inside either type of extension, and
+> `WithDriver(...)` remains the engine-selection API. Older manifest kind
+> labels are accepted on discovery and normalized; new bundles emit the new
+> labels. The historical `drivers/` bundle directory remains supported.
+
 ## Purpose
 
 Finish KVLite's extension-first distribution model without changing the

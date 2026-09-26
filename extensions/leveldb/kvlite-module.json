@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "leveldb",
-  "kind": "driver",
+  "kind": "engine",
   "version": "v0.1.0",
   "module_abi": 1,
   "driver": "leveldb",

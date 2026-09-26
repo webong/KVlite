@@ -671,11 +671,19 @@ func runModuleVerify(name string) int {
 
 func printModule(module kvlite.Module, source string) {
 	manifest := module.Manifest
+	kindLabel := "kind=" + string(manifest.Kind)
+	if manifest.SchemaVersion == kvlite.ModuleManifestMultiKindVersion {
+		kinds := make([]string, 0, len(manifest.Kinds))
+		for _, kind := range manifest.ProvidedKinds() {
+			kinds = append(kinds, string(kind))
+		}
+		kindLabel = "kinds=" + strings.Join(kinds, ",")
+	}
 	if module.Directory == "" {
-		fmt.Printf("%s\tkind=%s\tversion=%s\tsource=%s\n", manifest.Name, manifest.Kind, manifest.Version, source)
+		fmt.Printf("%s\t%s\tversion=%s\tsource=%s\n", manifest.Name, kindLabel, manifest.Version, source)
 		return
 	}
-	fmt.Printf("%s\tkind=%s\tversion=%s\tsource=%s\tpath=%s\n", manifest.Name, manifest.Kind, manifest.Version, source, module.Directory)
+	fmt.Printf("%s\t%s\tversion=%s\tsource=%s\tpath=%s\n", manifest.Name, kindLabel, manifest.Version, source, module.Directory)
 }
 
 // startModuleProcess resolves, verifies, and starts an installed executable

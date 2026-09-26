@@ -1,9 +1,11 @@
 # KVLite modules
 
-KVLite is embedded by default. A module is an independently distributed,
-versioned capability: a storage driver, HTTP, Redis, a codec, or a future
-backup/migration provider. Discovering a module never starts it, loads a shared
-library, or changes a database.
+KVLite is embedded by default. An extension is an independently distributed,
+versioned KVLite capability. Its manifest is a module descriptor; discovering
+it never starts it, loads a shared library, or changes a database. The current
+extension kinds are `engine` and `transport`: a package may provide either or
+both through its drivers. Other future capabilities will
+get their own kind rather than overloading `transport`.
 
 The module catalog takes the useful parts of both common extension models:
 SQLite-style explicit native artifacts, and PostgreSQL-style package metadata,
@@ -11,14 +13,14 @@ versioning, dependencies, and verification.
 
 ## The manifest contract
 
-Every packaged module has a `kvlite-module.json` file. Schema and module ABI
-version `1` require at least:
+Every packaged module has a `kvlite-module.json` file. The original schema
+version `1` declares one kind; module ABI version `1` requires at least:
 
 ```json
 {
   "schema_version": 1,
   "name": "rocksdb",
-  "kind": "driver",
+  "kind": "engine",
   "version": "v0.1.0",
   "module_abi": 1,
   "driver": "rocksdb",
@@ -40,6 +42,45 @@ Artifact paths are relative to the manifest, checksums are SHA-256, and a
 module name can only appear once in a discovery set. Unknown manifest fields,
 path traversal, incompatible module ABI versions, and duplicate module names
 are rejected.
+
+`kind` describes what a v1 extension provides, not its implementation type:
+`engine` adds storage and must name its KVLite `driver`; `transport` exposes a
+client protocol and must not name a storage driver. For example, the HTTP
+extension has a transport-driver implementation, but its manifest uses
+`"kind": "transport"` with no `driver` field. That field names only the
+storage adapter selected by `WithDriver(...)` when opening a database.
+
+Schema version `2` uses `kinds` instead of `kind` so one extension can provide
+both. An engine driver is resolved by the `driver` field, even when the
+extension's package name differs; a transport is activated by starting its
+executable artifact. For example, one `rocksdb-http` bundle could declare:
+
+```json
+{
+  "schema_version": 2,
+  "name": "rocksdb-http",
+  "kinds": ["engine", "transport"],
+  "version": "v0.1.0",
+  "module_abi": 1,
+  "driver": "rocksdb",
+  "capabilities": ["embedded-storage", "http-server"],
+  "license": "Apache-2.0",
+  "artifacts": [
+    {"platform": "darwin-arm64", "kind": "c-shared", "path": "lib/libkvlite.dylib", "sha256": "..."},
+    {"platform": "darwin-arm64", "kind": "executable", "path": "bin/kvlite-http", "sha256": "..."}
+  ]
+}
+```
+
+V1 and v2 manifests remain readable by the current catalog. V2 rejects a
+singular `kind`, duplicate kinds, and an engine without a driver. Existing
+single-kind bundles remain v1; module ABI v1 is unchanged.
+
+Installed manifests using the earlier `driver` and `extension` kind labels
+remain readable. Discovery normalizes those labels to `engine` and `transport`;
+new v1 source and release manifests emit only the canonical labels. The old
+`drivers/` installation directory remains a supported layout, not a module
+kind.
 
 The checksum detects damaged or unexpectedly replaced artifacts after a
 trusted installation; it is not itself a publisher signature. Release tooling
@@ -76,8 +117,8 @@ driver name and the server resolves only an installed, server-owned mapping.
 A missing driver returns `driver_not_installed`; an installed but unexposed one
 returns `driver_not_exposed`. Remote clients never choose a filesystem path.
 
-For in-process calls, local `WithDriver` resolution checks installed driver
-modules. A matching, verified C-shared or native module can be loaded at
+For in-process calls, local `WithDriver` resolution checks installed engine
+extensions. A matching, verified C-shared or native module can be loaded at
 runtime when supported on the current platform; an unavailable or incompatible
 artifact returns an actionable error. See Platform support below.
 
@@ -87,7 +128,7 @@ a different driver will fail rather than guessing or converting storage files.
 
 ## HTTP and Redis
 
-HTTP and Redis use the same module metadata and discovery rules as drivers,
+HTTP and Redis use the same module metadata and discovery rules as engine extensions,
 but a transport listener remains server policy. A client chooses HTTP or Redis
 by connecting to that endpoint; it cannot bind a server socket merely by
 asking for an extension.
@@ -238,7 +279,7 @@ looks like:
 {
   "schema_version": 1,
   "name": "memdb",
-  "kind": "driver",
+  "kind": "engine",
   "version": "v0.1.0",
   "module_abi": 1,
   "driver": "memdb",

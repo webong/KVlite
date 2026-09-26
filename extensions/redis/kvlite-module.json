@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "redis",
-  "kind": "extension",
+  "kind": "transport",
   "version": "v0.1.0",
   "module_abi": 1,
   "capabilities": ["redis-resp2", "redis-server"],

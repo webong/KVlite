@@ -425,7 +425,7 @@ write_module_manifest() {
     printf '{\n'
     printf '  "schema_version": 1,\n'
     printf '  "name": "%s",\n' "$driver"
-    printf '  "kind": "driver",\n'
+    printf '  "kind": "engine",\n'
     printf '  "version": "%s",\n' "$version"
     printf '  "module_abi": 1,\n'
     printf '  "driver": "%s",\n' "$driver"
@@ -491,7 +491,7 @@ write_extension_manifest() {
     printf '{\n'
     printf '  "schema_version": 1,\n'
     printf '  "name": "%s",\n' "$extension"
-    printf '  "kind": "extension",\n'
+    printf '  "kind": "transport",\n'
     printf '  "version": "%s",\n' "$version"
     printf '  "module_abi": 1,\n'
     printf '  "capabilities": %s,\n' "$capabilities_json"
